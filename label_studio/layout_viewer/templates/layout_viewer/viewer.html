@@ -1,0 +1,173 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Store Layout Viewer</title>
+    <link rel="stylesheet" href="/static/layout_viewer/viewer.css">
+</head>
+<body>
+    <div id="app">
+        <div id="toolbar">
+            <h1>Store Layout Viewer</h1>
+            <div class="toolbar-group">
+                <button id="fitViewBtn">Fit View</button>
+                <label><input type="checkbox" id="showPointCloud" checked> Map</label>
+                <label><input type="checkbox" id="showCameras" checked> Cameras</label>
+                <label id="compassDirLabel" style="display:none"><input type="checkbox" id="useCompassForMap"> Compass Dir</label>
+                <label id="recogDetailsLabel" style="display:none"><input type="checkbox" id="showRecogDetails"> Details</label>
+                <label id="debugLabel" style="display:none"><input type="checkbox" id="showDebugMatches"> Debug</label>
+                <label id="debugSourceLabel" style="display:none">
+                    Source
+                    <select id="debugSourceSelect">
+                        <option value="matches">Filtered</option>
+                        <option value="tracks">Tracks</option>
+                    </select>
+                </label>
+                <span class="toolbar-separator"></span>
+                <button id="companionModeBtn" title="Click on map to add companion photo" style="display:none">Companion</button>
+                <button id="calibrateBtn" title="Calibrate scale by marking two points">Calibrate</button>
+                <button id="annotationModeBtn">Annotate</button>
+                <div id="annotationControls" style="display:none">
+                    <span id="rotationValue">0°</span>
+                    <button id="rotateMinusBtn" title="-1°">−</button>
+                    <input type="range" id="rotationSlider" min="-180" max="180" value="0" step="1" title="Drag to rotate">
+                    <button id="rotatePlusBtn" title="+1°">+</button>
+                    <button id="exportMapPngBtn">Export PNG</button>
+                    <button id="saveJsonBtn">Save JSON</button>
+                </div>
+                <a href="{% url 'layout_viewer:index' %}" style="text-decoration:none">
+                    <button type="button">← Stores</button>
+                </a>
+                <button id="helpBtn">?</button>
+            </div>
+        </div>
+
+        <div id="mainContent">
+            <div id="mapPanel">
+                <canvas id="glCanvas"></canvas>
+                <div id="mapAnnotationLayer"></div>
+                <div id="northIndicator">
+                    <span class="north-arrow">&#x25B2;</span>
+                    <span>N</span>
+                </div>
+                <div id="storeInfo">
+                    <div class="store-name" id="storeName"></div>
+                    <div class="store-address" id="storeAddress"></div>
+                </div>
+                <div id="mapThumbnail">
+                    <img src="" alt="">
+                    <div class="thumb-label"></div>
+                    <div class="thumb-recog"></div>
+                </div>
+                <div id="scaleBar" style="display:none">
+                    <div class="scale-bar-text"></div>
+                    <div class="scale-bar-line"></div>
+                </div>
+                <div id="mapLegend"></div>
+            </div>
+
+            <div id="divider"></div>
+
+            <div id="imagePanel">
+                <div id="imageHeader">
+                    <button id="prevBtn">&larr;</button>
+                    <span class="elapsed-time" id="elapsedTime"></span>
+                    <span class="camera-name" id="cameraName">No camera selected</span>
+                    <button id="deleteCompanionBtn" class="delete-companion-btn" style="display:none" title="Delete this companion">✕</button>
+                    <button id="nextBtn">&rarr;</button>
+                </div>
+                <div id="imageRecogBar"></div>
+                <div id="imageContainer">
+                    <canvas id="compassCanvas" width="200" height="200"></canvas>
+                    <div id="imageDateTime"></div>
+                    <span class="placeholder">Click a camera on the map to view its image</span>
+                </div>
+                <div id="timeline">
+                    <div id="timelineTrack">
+                        <div id="timelineProgress"></div>
+                    </div>
+                    <div id="timelineThumb"></div>
+                    <div id="timelineThumbnail">
+                        <img src="" alt="">
+                        <div class="thumb-label"></div>
+                        <div class="thumb-recog"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="helpOverlay">
+        <div id="helpContent">
+            <h2>Keyboard Shortcuts</h2>
+            <table>
+                <tr><td>Left / Right</td><td>Previous / next camera</td></tr>
+                <tr><td>Up / Down</td><td>Previous / next camera</td></tr>
+                <tr><td>Space</td><td>Play / Pause</td></tr>
+                <tr><td>M</td><td>Toggle map</td></tr>
+                <tr><td>C</td><td>Toggle cameras</td></tr>
+                <tr><td>A</td><td>Toggle annotation mode</td></tr>
+                <tr><td>B</td><td>Toggle box draw mode</td></tr>
+                <tr><td>G</td><td>Toggle companion mode</td></tr>
+                <tr><td>Escape</td><td>Deselect camera</td></tr>
+                <tr><td>?</td><td>Toggle this help</td></tr>
+            </table>
+            <h2 style="margin-top:16px">Mouse Controls</h2>
+            <table>
+                <tr><td>Click camera</td><td>Select and view image</td></tr>
+                <tr><td>Scroll (map)</td><td>Zoom in/out</td></tr>
+                <tr><td>Drag (map)</td><td>Pan</td></tr>
+                <tr><td>Scroll (image)</td><td>Zoom image</td></tr>
+                <tr><td>Drag (image)</td><td>Pan image</td></tr>
+                <tr><td>Double-click (image)</td><td>Reset image zoom</td></tr>
+                <tr><td>Drag timeline</td><td>Scrub through cameras</td></tr>
+            </table>
+            <h2 style="margin-top:16px">Annotation Mode</h2>
+            <table>
+                <tr><td>Click "Annotate"</td><td>Toggle annotation mode</td></tr>
+                <tr><td>Ctrl + Drag (map)</td><td>Draw rectangle annotation</td></tr>
+                <tr><td>Click box</td><td>Select / deselect annotation</td></tr>
+                <tr><td>Click × on selected box</td><td>Delete annotation</td></tr>
+                <tr><td>X</td><td>Delete selected annotation</td></tr>
+                <tr><td>Escape</td><td>Deselect annotation</td></tr>
+                <tr><td>Enter angle + "Rotate"</td><td>Rotate all data around center</td></tr>
+                <tr><td>"Export PNG"</td><td>Download the rotated map without annotations</td></tr>
+                <tr><td>"Save JSON"</td><td>Download annotated data</td></tr>
+            </table>
+            <button class="close-help" onclick="document.getElementById('helpOverlay').classList.remove('visible')">Close</button>
+        </div>
+    </div>
+
+    <div id="calibrateDialog">
+        <div class="calibrate-dialog-content">
+            <h3>Enter Real Distance</h3>
+            <p>Enter the actual distance between the two marked points:</p>
+            <div class="calibrate-input-row">
+                <input type="number" id="calibrateDistInput" min="0" step="any" placeholder="e.g. 10">
+                <select id="calibrateUnitSelect">
+                    <option value="m" selected>m</option>
+                    <option value="cm">cm</option>
+                    <option value="mm">mm</option>
+                    <option value="km">km</option>
+                    <option value="ft">ft</option>
+                </select>
+            </div>
+            <div class="calibrate-btn-row">
+                <button id="calibrateConfirmBtn">Confirm</button>
+                <button id="calibrateCancelBtn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="fileInput" accept=".json" style="display:none">
+    <script>
+        // Configuration injected by Django template
+        window.LAYOUT_DATA_BASE_URL = '{{ data_base_url }}';
+        window.LAYOUT_SAVE_BASE_URL = '/layout-viewer/{{ store_id }}';
+        window.LAYOUT_LABELS_YAML_URL = '/static/layout_viewer/labels.yaml';
+    </script>
+    <script src="/static/layout_viewer/viewer.js"></script>
+</body>
+</html>

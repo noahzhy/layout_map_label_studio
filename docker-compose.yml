@@ -1,7 +1,7 @@
 services:
   nginx:
     build: .
-    image: heartexlabs/label-studio:latest
+    image: ccr.ccs.tencentyun.com/clobotics/label-studio:latest-arm64
     restart: unless-stopped
     ports:
       - "8080:8085"
@@ -20,6 +20,10 @@ services:
     volumes:
       - ./mydata:/label-studio/data:rw
       - ./deploy/nginx/certs:/certs:ro
+      # Layout viewer: mount static + data for nginx to serve
+      - ./label_studio/layout_viewer/static/layout_viewer:/label-studio/label_studio/core/static_build/layout_viewer:ro
+      # Mount updated nginx config with layout-data location block
+      - ./deploy/default.conf:/etc/nginx/nginx.conf:ro
     #   Optional: Override nginx default conf
     #      - ./deploy/my.conf:/etc/nginx/nginx.conf
     command: nginx
@@ -28,7 +32,7 @@ services:
     stdin_open: true
     tty: true
     build: .
-    image: heartexlabs/label-studio:latest
+    image: ccr.ccs.tencentyun.com/clobotics/label-studio:latest-arm64
     restart: unless-stopped
     expose:
       - "8000"
@@ -43,15 +47,23 @@ services:
       - POSTGRE_HOST=db
       - LABEL_STUDIO_HOST=${LABEL_STUDIO_HOST:-}
       - JSON_LOG=1
+      - LABEL_STUDIO_ENABLE_SIGNUP=true
+      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=false
     #      - LOG_LEVEL=DEBUG
     volumes:
       - ./mydata:/label-studio/data:rw
+      # Layout viewer app (mount source to avoid full rebuild)
+      - ./label_studio/layout_viewer:/label-studio/label_studio/layout_viewer:ro
+      - ./label_studio/core/urls.py:/label-studio/label_studio/core/urls.py:ro
+      - ./label_studio/core/settings/base.py:/label-studio/label_studio/core/settings/base.py:ro
     command: label-studio-uwsgi
 
   db:
-    image: pgautoupgrade/pgautoupgrade:17-alpine
+    image: ccr.ccs.tencentyun.com/clobotics/pgautoupgrade:17-alpine-arm64
     hostname: db
     restart: unless-stopped
+    ports:
+      - "5432:5432"
     # Optional: Enable TLS on PostgreSQL
     # Just drop your server.crt and server.key into folder 'deploy/pgsql/certs'
     # NOTE: Both files must have permissions u=rw (0600) or less
@@ -63,5 +75,5 @@ services:
       - POSTGRES_HOST_AUTH_METHOD=trust
       - POSTGRES_USER=postgres
     volumes:
-      - ${POSTGRES_DATA_DIR:-./postgres-data}:/var/lib/postgresql/data
+      - ${POSTGRES_DATA_DIR:-./postgres-data}:/var/CHClib/postgresql/data
       - ./deploy/pgsql/certs:/var/lib/postgresql/certs:ro

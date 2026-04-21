@@ -1,0 +1,23 @@
+# Annotation labels configuration
+# Add or remove labels as needed
+labels:
+
+  location:
+    - Checkout
+    - Entrance
+    - Exit
+    - Entrance/Exit
+    - Display
+
+  category:
+    - Shave Care
+    - Family Care
+    - PHC
+    - Fabric Care
+    - Oral Care
+    - Personal Care
+    - Feminine Care
+    - Home Care
+    - Baby Care
+    - Skin Care
+    - Hair Care
