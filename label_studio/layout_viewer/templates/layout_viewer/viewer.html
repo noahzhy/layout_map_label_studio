@@ -4,13 +4,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Store Layout Viewer</title>
+    <title>Store Layout Labeling</title>
     <link rel="stylesheet" href="/static/layout_viewer/viewer.css">
 </head>
 <body>
     <div id="app">
         <div id="toolbar">
-            <h1>Store Layout Viewer</h1>
+            <h1>Store Layout Labeling</h1>
             <div class="toolbar-group">
                 <button id="fitViewBtn">Fit View</button>
                 <label><input type="checkbox" id="showPointCloud" checked> Map</label>
@@ -40,6 +40,14 @@
                 <a href="{% url 'layout_viewer:index' %}" style="text-decoration:none">
                     <button type="button">← Stores</button>
                 </a>
+                {% if task %}
+                <button id="markDoneBtn"
+                    data-status="{{ task.status }}"
+                    style="background:{% if task.status == 'done' or task.status == 'reviewed' %}#68d391{% else %}#faf089{% endif %};color:#1a202c;font-weight:600;"
+                    title="完成标注并提交">
+                    {% if task.status == 'done' %}✓ 已完成{% elif task.status == 'reviewed' %}✓ 已审核{% else %}完成标注{% endif %}
+                </button>
+                {% endif %}
                 <button id="helpBtn">?</button>
             </div>
         </div>
@@ -167,6 +175,48 @@
         window.LAYOUT_DATA_BASE_URL = '{{ data_base_url }}';
         window.LAYOUT_SAVE_BASE_URL = '/layout-viewer/{{ store_id }}';
         window.LAYOUT_LABELS_YAML_URL = '/static/layout_viewer/labels.yaml';
+
+        {% if task %}
+        // Mark-done handler
+        document.addEventListener('DOMContentLoaded', function () {
+            const btn = document.getElementById('markDoneBtn');
+            if (!btn) return;
+            const isDone = btn.dataset.status === 'done' || btn.dataset.status === 'reviewed';
+            if (isDone) { btn.disabled = true; return; }
+            btn.addEventListener('click', function () {
+                if (!confirm('确认完成标注并提交？')) return;
+                btn.disabled = true;
+                btn.textContent = '提交中...';
+                fetch('/layout-viewer/{{ store_id }}/mark-done', {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': getCookie('csrftoken') },
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        btn.textContent = '✓ 已完成';
+                        btn.style.background = '#68d391';
+                    } else {
+                        btn.disabled = false;
+                        btn.textContent = '完成标注';
+                        alert('提交失败: ' + (data.message || '未知错误'));
+                    }
+                })
+                .catch(() => {
+                    btn.disabled = false;
+                    btn.textContent = '完成标注';
+                    alert('网络错误，请重试');
+                });
+            });
+
+            function getCookie(name) {
+                const value = `; ${document.cookie}`;
+                const parts = value.split(`; ${name}=`);
+                if (parts.length === 2) return parts.pop().split(';').shift();
+                return '';
+            }
+        });
+        {% endif %}
     </script>
     <script src="/static/layout_viewer/viewer.js"></script>
 </body>

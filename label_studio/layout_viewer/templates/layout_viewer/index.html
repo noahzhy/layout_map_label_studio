@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Store Layout Viewer - Select Store</title>
+    <title>Store Layout Labeling - Select Store</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -66,38 +66,101 @@
             padding: 60px 20px;
             color: #7b6a54;
         }
-        .empty-state h2 {
-            font-size: 18px;
-            margin-bottom: 12px;
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
         }
-        .empty-state code {
-            background: #eee3cd;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 13px;
+        .badge-pending   { background:#feebc8; color:#92400e; }
+        .badge-in_progress { background:#bee3f8; color:#1a365d; }
+        .badge-done      { background:#c6f6d5; color:#22543d; }
+        .badge-reviewed  { background:#e9d8fd; color:#44337a; }
+        .badge-unassigned{ background:#fed7d7; color:#742a2a; }
+        .assignees { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+        .assignee-row { font-size: 12px; color: #5c4d3b; display: flex; align-items: center; gap: 6px; }
+        .admin-bar {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 24px; padding: 12px 16px;
+            background: #fff8ee; border: 1px solid #d3c3a6; border-radius: 8px;
+            font-size: 13px; color: #7b6a54;
         }
+        .admin-bar a { color: #8a5a2b; font-weight: 600; text-decoration: none; }
+        .admin-bar a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🗺️ Store Layout Viewer</h1>
-        <p class="subtitle">Select a store to view its layout map and camera images</p>
+        <h1>🗺️ Store Layout Labeling</h1>
+        <p class="subtitle">
+            {% if is_admin %}管理员视图 — 所有商店及任务分配状态{% else %}我的标注任务{% endif %}
+        </p>
+
+        {% if is_admin %}
+        <div class="admin-bar">
+            <span>管理员通过 <a href="/django-admin/layout_viewer/layouttask/add/" target="_blank">Django Admin → Layout Tasks</a> 创建/分配任务</span>
+            <a href="/django-admin/layout_viewer/layouttask/" target="_blank">查看所有任务 →</a>
+        </div>
+        {% endif %}
 
         {% if stores %}
         <div class="store-grid">
             {% for store in stores %}
+            {% if is_admin %}
+            {# Admin card: show all assignees and their status #}
+            <div class="store-card" style="cursor:default">
+                <h2>{{ store.name }}</h2>
+                <div class="store-id">{{ store.id }}</div>
+                {% if store.unassigned %}
+                    <div class="assignees"><span class="badge badge-unassigned">未分配</span></div>
+                {% else %}
+                    <div class="assignees">
+                    {% for task in store.tasks %}
+                        <div class="assignee-row">
+                            <span>{{ task.assigned_to.email|default:task.assigned_to.username }}</span>
+                            <span class="badge badge-{{ task.status }}">
+                                {{ task.get_status_display }}
+                            </span>
+                            {% if task.last_saved_at %}
+                            <span style="color:#9c8f7a;font-size:11px">{{ task.last_saved_at|date:"m/d H:i" }}</span>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                    </div>
+                {% endif %}
+                <div style="margin-top:10px">
+                    <a href="{% url 'layout_viewer:viewer' store_id=store.id %}" style="font-size:12px;color:#8a5a2b;">预览 →</a>
+                </div>
+            </div>
+            {% else %}
+            {# Annotator card: link to viewer #}
             <a href="{% url 'layout_viewer:viewer' store_id=store.id %}" class="store-card">
                 <h2>{{ store.name }}</h2>
                 <div class="store-id">{{ store.id }}</div>
-                <div class="file-count">{{ store.files|length }} data file{{ store.files|pluralize }}</div>
+                <div style="margin-top:8px">
+                    <span class="badge badge-{{ store.task.status }}">{{ store.task.get_status_display }}</span>
+                    {% if store.task.last_saved_at %}
+                    <span style="font-size:11px;color:#9c8f7a;margin-left:6px">上次保存 {{ store.task.last_saved_at|date:"m/d H:i" }}</span>
+                    {% endif %}
+                </div>
+                {% if store.task.notes %}
+                <div style="margin-top:8px;font-size:12px;color:#7b6a54;">{{ store.task.notes }}</div>
+                {% endif %}
             </a>
+            {% endif %}
             {% endfor %}
         </div>
         {% else %}
         <div class="empty-state">
-            <h2>No stores found</h2>
-            <p>Place store data folders under <code>mydata/layout/</code></p>
-            <p style="margin-top:8px">Each folder should contain at least one <code>viewer_*.json.gz</code> file</p>
+            <h2>{% if is_admin %}暂无商店数据{% else %}暂无分配给您的任务{% endif %}</h2>
+            {% if is_admin %}
+            <p>在 <code>mydata/layout/</code> 下放置商店数据目录</p>
+            <p style="margin-top:8px">每个目录需包含至少一个 <code>viewer_*.json.gz</code> 文件</p>
+            {% else %}
+            <p>请联系管理员为您分配标注任务</p>
+            {% endif %}
         </div>
         {% endif %}
     </div>

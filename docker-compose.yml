@@ -10,6 +10,7 @@ services:
       - app
     environment:
       - LABEL_STUDIO_HOST=${LABEL_STUDIO_HOST:-}
+      - LABEL_STUDIO_LANGUAGE=zh-CN
     #   Optional: Set nginx error log level (default: warn)
     #   Use 'warn' or higher to reduce noisy "client closed keepalive connection" messages
     #      - NGINX_ERROR_LOG_LEVEL=warn
@@ -75,5 +76,5 @@ services:
       - POSTGRES_HOST_AUTH_METHOD=trust
       - POSTGRES_USER=postgres
     volumes:
-      - ${POSTGRES_DATA_DIR:-./postgres-data}:/var/CHClib/postgresql/data
+      - ${POSTGRES_DATA_DIR:-./postgres-data}:/var/lib/postgresql/data
       - ./deploy/pgsql/certs:/var/lib/postgresql/certs:ro

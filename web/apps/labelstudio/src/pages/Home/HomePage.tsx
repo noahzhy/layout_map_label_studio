@@ -136,10 +136,10 @@ export const HomePage: Page = () => {
         <section className="flex flex-col gap-6">
           <div className="flex flex-col gap-1">
             <Typography variant="headline" size="small">
-              Welcome 👋
+              你好 👋
             </Typography>
             <Typography size="small" className="text-neutral-content-subtler">
-              Let's get you started.
+              让我们开始吧！选择一个项目继续，或者创建一个新项目来开始标注你的数据。
             </Typography>
           </div>
           <div className="flex justify-start gap-4">

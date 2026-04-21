@@ -1,5 +1,5 @@
 /**
- * Interactive Store Layout Viewer
+ * Interactive Store Layout Labeling
  *
  * WebGL2 map renderer with split-pane image viewer, compass, timeline scrubber,
  * and dynamic camera density based on zoom level.
@@ -493,7 +493,7 @@ class StoreLayoutViewer {
         this.syncRotationSlider();
 
         const storeName = this.metadata.storeName ? String(this.metadata.storeName).trim() : '';
-        document.title = storeName ? `${storeName} - Store Layout Viewer` : 'Store Layout Viewer';
+        document.title = storeName ? `${storeName} - Store Layout Labeling` : 'Store Layout Labeling';
 
         const compassDirLabel = document.getElementById('compassDirLabel');
         if (compassDirLabel) {
