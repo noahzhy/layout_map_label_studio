@@ -391,7 +391,7 @@ class StoreLayoutViewer {
     }
 
     async fetchGzippedJson(url) {
-        const resp = await fetch(url);
+        const resp = await fetch(url, { cache: 'no-cache' });
         if (!resp.ok) {
             throw new Error(`Failed to load ${url}: ${resp.status}`);
         }

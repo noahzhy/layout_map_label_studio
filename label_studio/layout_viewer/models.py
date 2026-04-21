@@ -2,6 +2,37 @@ from django.conf import settings
 from django.db import models
 
 
+class LayoutProject(models.Model):
+    """A named labeling project that groups store layout tasks."""
+
+    name = models.CharField(max_length=256, help_text='Project name')
+    description = models.TextField(blank=True, help_text='Project description / notes for annotators')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_layout_projects',
+    )
+    is_archived = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = 'layout_viewer'
+        ordering = ['-created_at']
+        verbose_name = 'Layout Project'
+        verbose_name_plural = 'Layout Projects'
+
+    def __str__(self):
+        return self.name
+
+    def task_count(self):
+        return self.tasks.count()
+
+    def done_count(self):
+        return self.tasks.filter(status__in=['done', 'reviewed']).count()
+
+
 class LayoutTask(models.Model):
     """Tracks assignment of a store layout labeling task to a specific annotator."""
 
@@ -15,6 +46,14 @@ class LayoutTask(models.Model):
         max_length=256,
         db_index=True,
         help_text='Directory name under mydata/layout/',
+    )
+    project = models.ForeignKey(
+        LayoutProject,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='tasks',
+        help_text='Parent project (optional)',
     )
     assigned_to = models.ForeignKey(
         settings.AUTH_USER_MODEL,

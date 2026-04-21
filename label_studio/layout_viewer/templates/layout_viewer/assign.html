@@ -1,0 +1,366 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分配任务 - {{ project.name }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f3ecd9;
+            color: #352b1f;
+            padding: 32px 20px;
+        }
+        .container { max-width: 1100px; margin: 0 auto; }
+
+        /* Breadcrumb */
+        .breadcrumb { font-size: 13px; color: #9c8f7a; margin-bottom: 16px; }
+        .breadcrumb a { color: #8a5a2b; text-decoration: none; }
+        .breadcrumb a:hover { text-decoration: underline; }
+
+        h1 { font-size: 22px; font-weight: 600; color: #8a5a2b; margin-bottom: 4px; }
+        .subtitle { font-size: 13px; color: #7b6a54; margin-bottom: 24px; }
+
+        /* Stats bar */
+        .stats-bar {
+            display: flex; gap: 20px; margin-bottom: 20px;
+            padding: 12px 16px;
+            background: #fff8ee; border: 1px solid #d3c3a6; border-radius: 8px;
+            font-size: 13px; color: #5c4d3b;
+            flex-wrap: wrap; align-items: center;
+        }
+        .stats-bar strong { font-size: 18px; font-weight: 700; color: #352b1f; margin-right: 4px; }
+        .stats-spacer { flex: 1; }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex; gap: 10px; align-items: center;
+            margin-bottom: 16px; flex-wrap: wrap;
+        }
+        .toolbar label { font-size: 13px; color: #5c4d3b; font-weight: 600; }
+        .annotator-select {
+            flex: 1; min-width: 220px; max-width: 480px;
+            border: 1px solid #c9b89e; border-radius: 6px;
+            padding: 6px 10px; font-size: 13px;
+            background: #fdf6e8; color: #352b1f;
+            height: 120px;
+        }
+        .btn {
+            padding: 7px 16px; border-radius: 6px; border: none; cursor: pointer;
+            font-size: 13px; font-weight: 600; transition: opacity 0.15s;
+        }
+        .btn:hover { opacity: 0.85; }
+        .btn-primary { background: #8a5a2b; color: #fff; }
+        .btn-secondary { background: #e0d5c3; color: #352b1f; }
+        .btn-success { background: #38a169; color: #fff; }
+        .btn-danger  { background: #e53e3e; color: #fff; }
+
+        /* Table */
+        .table-wrap {
+            background: #fdf6e8;
+            border: 1px solid #d3c3a6;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        thead th {
+            background: #ede3cf; padding: 10px 14px;
+            text-align: left; font-weight: 600; color: #5c4d3b;
+            border-bottom: 1px solid #d3c3a6;
+        }
+        thead th:first-child { width: 32px; padding-left: 14px; }
+        tbody tr { border-bottom: 1px solid #ede3cf; transition: background 0.1s; }
+        tbody tr:last-child { border-bottom: none; }
+        tbody tr:hover { background: #f5ecda; }
+        tbody tr.disabled { opacity: 0.45; }
+        td { padding: 9px 14px; vertical-align: middle; }
+        td:first-child { text-align: center; }
+
+        .store-name { font-weight: 600; color: #352b1f; }
+        .store-id   { font-size: 11px; color: #9c8f7a; font-family: monospace; margin-top: 2px; }
+
+        .badge {
+            display: inline-block; padding: 2px 8px;
+            border-radius: 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+        }
+        .badge-pending     { background:#feebc8; color:#92400e; }
+        .badge-in_progress { background:#bee3f8; color:#1a365d; }
+        .badge-done        { background:#c6f6d5; color:#22543d; }
+        .badge-reviewed    { background:#e9d8fd; color:#44337a; }
+        .badge-unassigned  { background:#fed7d7; color:#742a2a; }
+        .badge-no-data     { background:#e2e8f0; color:#4a5568; }
+
+        .assignee-select {
+            width: 100%; border: 1px solid #c9b89e; border-radius: 6px;
+            padding: 5px 8px; font-size: 12px;
+            background: #fdf6e8; color: #352b1f;
+        }
+        .assignee-select.changed { border-color: #8a5a2b; background: #fff8ee; }
+
+        /* Save bar */
+        .save-bar {
+            position: sticky; bottom: 0;
+            display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+            padding: 14px 20px;
+            background: #ede3cf; border-top: 1px solid #d3c3a6;
+            border-radius: 0 0 10px 10px;
+        }
+        #saveMsg { font-size: 13px; color: #38a169; font-weight: 600; display: none; }
+        #errorMsg { font-size: 13px; color: #e53e3e; font-weight: 600; display: none; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="breadcrumb">
+        <a href="{% url 'layout_viewer:index' %}">← 项目列表</a>
+        &nbsp;/&nbsp;
+        <a href="{% url 'layout_viewer:project-detail' pk=project.id %}">{{ project.name }}</a>
+        &nbsp;/&nbsp; 分配任务
+    </div>
+    <h1>分配标注任务</h1>
+    <p class="subtitle">{{ project.name }}  —  为每个门店指定标注人员，点击「保存分配」提交。</p>
+
+    <!-- Stats -->
+    <div class="stats-bar">
+        <div><strong>{{ total }}</strong> 个门店</div>
+        <div><strong id="assignedCount">{{ assigned }}</strong> 已分配</div>
+        <div><strong id="unassignedCount">{{ unassigned }}</strong> 未分配</div>
+        <div class="stats-spacer"></div>
+        <div style="font-size:12px;color:#9c8f7a">磁盘目录：{{ base_dir }}</div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+        <label>选择标注员：</label>
+        <select id="annotatorPicker" class="annotator-select" multiple>
+            {% for a in annotators %}
+            <option value="{{ a.id }}">{{ a.display }}</option>
+            {% endfor %}
+        </select>
+        <div style="display:flex;flex-direction:column;gap:6px">
+            <button class="btn btn-primary" onclick="autoAssign()">🔀 均分给选中人员</button>
+            <button class="btn btn-secondary" onclick="clearUnassigned()">🗑 清除未分配行</button>
+            <button class="btn btn-secondary" onclick="selectAll(true)">全选</button>
+            <button class="btn btn-secondary" onclick="selectAll(false)">全不选</button>
+        </div>
+    </div>
+
+    <!-- Table -->
+    <div class="table-wrap">
+        <table id="storeTable">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="checkAll" onchange="toggleAll(this)"></th>
+                    <th>门店</th>
+                    <th>磁盘状态</th>
+                    <th>当前状态</th>
+                    <th>分配给</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for store in stores %}
+            <tr class="store-row {% if not store.on_disk %}disabled{% endif %}"
+                data-store="{{ store.id }}"
+                data-orig-user="{{ store.assigned_to_id|default:'' }}">
+                <td>
+                    <input type="checkbox" class="row-check" {% if not store.on_disk %}disabled{% endif %}>
+                </td>
+                <td>
+                    <div class="store-name">{{ store.name }}</div>
+                    <div class="store-id">{{ store.id }}</div>
+                </td>
+                <td>
+                    {% if store.on_disk %}
+                    <span style="color:#38a169">✅ 有数据</span>
+                    {% else %}
+                    <span class="badge badge-no-data">⚠️ 无数据</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if store.task %}
+                    <span class="badge badge-{{ store.status }}">{{ store.task.get_status_display }}</span>
+                    {% if store.task.last_saved_at %}
+                    <div style="font-size:11px;color:#9c8f7a;margin-top:3px">{{ store.task.last_saved_at|date:"m/d H:i" }}</div>
+                    {% endif %}
+                    {% else %}
+                    <span class="badge badge-unassigned">未分配</span>
+                    {% endif %}
+                </td>
+                <td style="min-width:180px">
+                    {% if store.on_disk %}
+                    <select class="assignee-select" onchange="markChanged(this)">
+                        <option value="">— 不分配 —</option>
+                        {% for a in annotators %}
+                        <option value="{{ a.id }}"
+                            {% if store.assigned_to_id == a.id %}selected{% endif %}>
+                            {{ a.display }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    {% else %}
+                    <span style="font-size:12px;color:#9c8f7a">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- Save bar inside the table-wrap for sticky bottom -->
+        <div class="save-bar">
+            <span id="saveMsg">✅ 保存成功！</span>
+            <span id="errorMsg">❌ 保存失败，请重试</span>
+            <button class="btn btn-secondary" onclick="resetChanges()">撤销修改</button>
+            <button class="btn btn-success" onclick="saveAssignments()">💾 保存分配</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const CSRF_TOKEN = '{{ csrf_token }}';
+const SAVE_URL   = '{% url "layout_viewer:assign-tasks" pk=project.id %}';
+
+// ── Mark select as changed ───────────────────────────────────────────────────
+function markChanged(sel) {
+    const orig = sel.closest('tr').dataset.origUser || '';
+    if (sel.value !== orig) {
+        sel.classList.add('changed');
+    } else {
+        sel.classList.remove('changed');
+    }
+    refreshStats();
+}
+
+// ── Toggle all checkboxes ───────────────────────────────────────────────────
+function toggleAll(master) {
+    document.querySelectorAll('.row-check:not(:disabled)').forEach(cb => {
+        cb.checked = master.checked;
+    });
+}
+function selectAll(val) {
+    document.getElementById('checkAll').checked = val;
+    document.querySelectorAll('.row-check:not(:disabled)').forEach(cb => cb.checked = val);
+}
+
+// ── Auto-assign: round-robin among selected annotators ──────────────────────
+function autoAssign() {
+    const picker = document.getElementById('annotatorPicker');
+    const selected = [...picker.selectedOptions].map(o => ({ id: o.value, text: o.text }));
+    if (selected.length === 0) {
+        alert('请先在左侧选择至少一名标注人员（按住 Cmd/Ctrl 多选）');
+        return;
+    }
+
+    const rows = [...document.querySelectorAll('.store-row:not(.disabled)')];
+    const checked = rows.filter(r => r.querySelector('.row-check').checked);
+    const targets = checked.length > 0 ? checked : rows;
+
+    let idx = 0;
+    targets.forEach(row => {
+        const sel = row.querySelector('.assignee-select');
+        if (!sel) return;
+        sel.value = selected[idx % selected.length].id;
+        markChanged(sel);
+        idx++;
+    });
+    refreshStats();
+}
+
+// ── Clear unassigned rows ───────────────────────────────────────────────────
+function clearUnassigned() {
+    document.querySelectorAll('.store-row:not(.disabled)').forEach(row => {
+        const sel = row.querySelector('.assignee-select');
+        if (sel && !sel.value) return; // already empty, skip
+    });
+    // Just uncheck them
+    document.querySelectorAll('.row-check:not(:disabled)').forEach(cb => {
+        const sel = cb.closest('tr').querySelector('.assignee-select');
+        if (sel && sel.value === '') cb.checked = false;
+    });
+}
+
+// ── Reset to original values ────────────────────────────────────────────────
+function resetChanges() {
+    document.querySelectorAll('.store-row').forEach(row => {
+        const sel = row.querySelector('.assignee-select');
+        if (!sel) return;
+        sel.value = row.dataset.origUser || '';
+        sel.classList.remove('changed');
+    });
+    refreshStats();
+}
+
+// ── Refresh stats bar ────────────────────────────────────────────────────────
+function refreshStats() {
+    let assigned = 0, unassigned = 0;
+    document.querySelectorAll('.store-row:not(.disabled)').forEach(row => {
+        const sel = row.querySelector('.assignee-select');
+        if (sel && sel.value) assigned++;
+        else if (sel) unassigned++;
+    });
+    document.getElementById('assignedCount').textContent = assigned;
+    document.getElementById('unassignedCount').textContent = unassigned;
+}
+
+// ── Save assignments to server ───────────────────────────────────────────────
+async function saveAssignments() {
+    const payload = [];
+    document.querySelectorAll('.store-row').forEach(row => {
+        const storeId = row.dataset.store;
+        const sel = row.querySelector('.assignee-select');
+        payload.push({
+            store_id: storeId,
+            user_id: sel ? (sel.value ? parseInt(sel.value, 10) : null) : null,
+        });
+    });
+
+    const saveBtn = document.querySelector('.btn-success');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中…';
+    document.getElementById('saveMsg').style.display = 'none';
+    document.getElementById('errorMsg').style.display = 'none';
+
+    try {
+        const resp = await fetch(SAVE_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': CSRF_TOKEN,
+            },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (resp.ok && data.status === 'ok') {
+            // Update orig-user after save so markChanged works correctly
+            document.querySelectorAll('.store-row').forEach(row => {
+                const sel = row.querySelector('.assignee-select');
+                if (sel) {
+                    row.dataset.origUser = sel.value;
+                    sel.classList.remove('changed');
+                }
+            });
+            const msg = document.getElementById('saveMsg');
+            msg.textContent = `✅ 保存成功！新建 ${data.created}，更新 ${data.updated}，取消 ${data.deleted}`;
+            msg.style.display = 'inline';
+            setTimeout(() => msg.style.display = 'none', 4000);
+            refreshStats();
+        } else {
+            throw new Error(data.message || '未知错误');
+        }
+    } catch (e) {
+        const msg = document.getElementById('errorMsg');
+        msg.textContent = `❌ 保存失败：${e.message}`;
+        msg.style.display = 'inline';
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '💾 保存分配';
+    }
+}
+
+// Init
+refreshStats();
+</script>
+</body>
+</html>

@@ -37,8 +37,8 @@
                     <button id="exportMapPngBtn">Export PNG</button>
                     <button id="saveJsonBtn">Save JSON</button>
                 </div>
-                <a href="{% url 'layout_viewer:index' %}" style="text-decoration:none">
-                    <button type="button">← Stores</button>
+                <a href="{% if project %}{% url 'layout_viewer:project-detail' pk=project.id %}{% else %}{% url 'layout_viewer:index' %}{% endif %}" style="text-decoration:none">
+                    <button type="button">{% if project %}← {{ project.name }}{% else %}← Projects{% endif %}</button>
                 </a>
                 {% if task %}
                 <button id="markDoneBtn"

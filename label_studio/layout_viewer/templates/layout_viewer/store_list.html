@@ -1,0 +1,148 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ project.name }} - Stores</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f3ecd9;
+            color: #352b1f;
+            padding: 40px 20px;
+        }
+        .container { max-width: 960px; margin: 0 auto; }
+        .breadcrumb { font-size: 13px; color: #9c8f7a; margin-bottom: 16px; }
+        .breadcrumb a { color: #8a5a2b; text-decoration: none; }
+        .breadcrumb a:hover { text-decoration: underline; }
+        h1 { font-size: 22px; font-weight: 600; color: #8a5a2b; margin-bottom: 4px; }
+        .desc { font-size: 13px; color: #7b6a54; margin-bottom: 28px; }
+        .admin-bar {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 20px; padding: 10px 16px;
+            background: #fff8ee; border: 1px solid #d3c3a6; border-radius: 8px;
+            font-size: 13px; color: #7b6a54;
+        }
+        .admin-bar a { color: #8a5a2b; font-weight: 600; text-decoration: none; }
+        .admin-bar a:hover { text-decoration: underline; }
+        .store-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        .store-card {
+            background: #fdf6e8;
+            border: 1px solid #d3c3a6;
+            border-radius: 8px;
+            padding: 20px;
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.2s;
+            display: block;
+        }
+        .store-card:hover {
+            background: #f0e5ce;
+            border-color: #baa789;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .store-card.admin-card { cursor: default; }
+        .store-card.admin-card:hover { transform: none; box-shadow: none; }
+        .store-card h2 { font-size: 15px; font-weight: 600; margin-bottom: 4px; color: #352b1f; }
+        .store-id { font-size: 11px; color: #7b6a54; font-family: monospace; margin-bottom: 10px; }
+        .badge {
+            display: inline-block; padding: 2px 8px;
+            border-radius: 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+        }
+        .badge-pending    { background:#feebc8; color:#92400e; }
+        .badge-in_progress{ background:#bee3f8; color:#1a365d; }
+        .badge-done       { background:#c6f6d5; color:#22543d; }
+        .badge-reviewed   { background:#e9d8fd; color:#44337a; }
+        .badge-unassigned { background:#fed7d7; color:#742a2a; }
+        .badge-no-data    { background:#e2e8f0; color:#4a5568; }
+        .assignees { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+        .assignee-row { font-size: 12px; color: #5c4d3b; display: flex; align-items: center; gap: 6px; }
+        .preview-link { font-size: 12px; color: #8a5a2b; margin-top: 10px; display: inline-block; }
+        .empty-state { text-align: center; padding: 50px 20px; color: #7b6a54; }
+        .empty-state h2 { font-size: 18px; margin-bottom: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="{% url 'layout_viewer:index' %}">← 项目列表</a>
+            &nbsp;/&nbsp; {{ project.name }}
+        </div>
+        <h1>{{ project.name }}</h1>
+        <p class="desc">{% if project.description %}{{ project.description }}{% else %}商店标注任务列表{% endif %}</p>
+
+        {% if is_admin %}
+        <div class="admin-bar">
+            <span>在
+                <a href="/admin/layout_viewer/layouttask/add/" target="_blank">Django Admin → Layout Tasks</a>
+                为本项目添加商店任务并分配标注员
+            </span>
+            <a href="{% url 'layout_viewer:assign-tasks' pk=project.id %}" style="font-weight:700;color:#38a169;">📋 分配任务管理 →</a>
+        </div>
+        {% endif %}
+
+        {% if stores %}
+        <div class="store-grid">
+            {% for store in stores %}
+            {% if is_admin %}
+            <div class="store-card admin-card">
+                <h2>{{ store.name }}</h2>
+                <div class="store-id">{{ store.id }}</div>
+                {% if not store.on_disk %}
+                    <span class="badge badge-no-data">文件缺失</span>
+                {% elif store.unassigned %}
+                    <div class="assignees"><span class="badge badge-unassigned">未分配</span></div>
+                {% else %}
+                    <div class="assignees">
+                    {% for task in store.tasks %}
+                        <div class="assignee-row">
+                            <span>{{ task.assigned_to.email|default:task.assigned_to.username }}</span>
+                            <span class="badge badge-{{ task.status }}">{{ task.get_status_display }}</span>
+                            {% if task.last_saved_at %}
+                            <span style="color:#9c8f7a;font-size:11px">{{ task.last_saved_at|date:"m/d H:i" }}</span>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                    </div>
+                {% endif %}
+                {% if store.on_disk %}
+                <a class="preview-link" href="{% url 'layout_viewer:viewer' store_id=store.id %}">预览 →</a>
+                {% endif %}
+            </div>
+            {% else %}
+            <a href="{% url 'layout_viewer:viewer' store_id=store.id %}" class="store-card">
+                <h2>{{ store.name }}</h2>
+                <div class="store-id">{{ store.id }}</div>
+                <div style="margin-top:8px">
+                    <span class="badge badge-{{ store.task.status }}">{{ store.task.get_status_display }}</span>
+                    {% if store.task.last_saved_at %}
+                    <span style="font-size:11px;color:#9c8f7a;margin-left:6px">上次保存 {{ store.task.last_saved_at|date:"m/d H:i" }}</span>
+                    {% endif %}
+                </div>
+                {% if store.task.notes %}
+                <div style="margin-top:8px;font-size:12px;color:#7b6a54;">{{ store.task.notes }}</div>
+                {% endif %}
+            </a>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <h2>{% if is_admin %}本项目暂无商店任务{% else %}暂无分配给您的任务{% endif %}</h2>
+            {% if is_admin %}
+            <p><a href="/admin/layout_viewer/layouttask/add/" style="color:#8a5a2b">添加任务 →</a></p>
+            {% else %}
+            <p>请联系管理员为您分配任务</p>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

@@ -57,6 +57,8 @@ services:
       - ./label_studio/layout_viewer:/label-studio/label_studio/layout_viewer:ro
       - ./label_studio/core/urls.py:/label-studio/label_studio/core/urls.py:ro
       - ./label_studio/core/settings/base.py:/label-studio/label_studio/core/settings/base.py:ro
+      # Clobotics-branded login page
+      - ./label_studio/users/templates/users:/label-studio/label_studio/users/templates/users:ro
     command: label-studio-uwsgi
 
   db:
