@@ -1,23 +1,86 @@
 # Annotation labels configuration
-# Add or remove labels as needed
+# Groups map to labeling Levels 1-6
+# label_metadata section defines type (bbox/polygon/attribute), level, and color per group
+
 labels:
 
-  location:
-    - Checkout
+  boundary:
+    - Boundary
+
+  inner-structure:
+    - inner-wall
+
+  fixture:
     - Entrance
-    - Exit
-    - Entrance/Exit
-    - Display
+    - Checkout
+    - Shelf
+    - Wall shelf
+    - Endcap
+    - Counter
+    - Island
+    - Cooler
+    - Pharmacy
+    - Restroom
+    - Other
+
+  aisle:
+    - Aisle
+
+  area:
+    - Grocery Area
+    - Produce Area
+    - Dairy Area
+    - Frozen Area
+    - Alcohol Area
+    - Bakery Area
+    - Deli Area
+    - Meat Area
 
   category:
+    - Beverages
+    - Snacks
+    - Coffee & Tea
+    - Household
+    - Personal Care
+    - Health & Beauty
+    - Frozen Foods
+    - Bakery
+    - Deli
+    - Produce
+    - Meat & Seafood
+    - Dairy & Eggs
     - Shave Care
     - Family Care
-    - PHC
     - Fabric Care
     - Oral Care
-    - Personal Care
     - Feminine Care
     - Home Care
     - Baby Care
     - Skin Care
     - Hair Care
+
+label_metadata:
+  boundary:
+    type: polygon
+    level: 1
+    color: '#e74c3c'
+  inner-structure:
+    type: polygon
+    level: 2
+    color: '#8e44ad'
+  fixture:
+    type: bbox
+    level: 3
+    color: '#2980b9'
+  aisle:
+    type: bbox
+    level: 4
+    color: '#27ae60'
+  area:
+    type: polygon
+    level: 5
+    color: '#f39c12'
+  category:
+    type: attribute
+    level: 6
+    color: '#95a5a6'

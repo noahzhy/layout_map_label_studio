@@ -26,14 +26,19 @@
                     </select>
                 </label>
                 <span class="toolbar-separator"></span>
-                <button id="companionModeBtn" title="Click on map to add companion photo" style="display:none">Companion</button>
+                <button id="companionModeBtn" title="Click on map to add companion photo">Companion</button>
                 <button id="calibrateBtn" title="Calibrate scale by marking two points">Calibrate</button>
-                <button id="annotationModeBtn">Annotate</button>
-                <div id="annotationControls" style="display:none">
+                <div id="annotationControls" style="display:flex">
                     <span id="rotationValue">0°</span>
                     <button id="rotateMinusBtn" title="-1°">−</button>
                     <input type="range" id="rotationSlider" min="-180" max="180" value="0" step="1" title="Drag to rotate">
                     <button id="rotatePlusBtn" title="+1°">+</button>
+                    <span class="toolbar-separator"></span>
+                    <button id="polygonModeBtn" title="Draw polygon (P)">⬡ Polygon</button>
+                    <span class="toolbar-separator"></span>
+                    <button id="undoBtn" title="Undo (Ctrl+Z)">↩</button>
+                    <button id="redoBtn" title="Redo (Ctrl+Y)">↪</button>
+                    <span class="toolbar-separator"></span>
                     <button id="exportMapPngBtn">Export PNG</button>
                     <button id="saveJsonBtn">Save JSON</button>
                 </div>
@@ -56,6 +61,14 @@
             <div id="mapPanel">
                 <canvas id="glCanvas"></canvas>
                 <div id="mapAnnotationLayer"></div>
+                <div id="layerPanel">
+                    <div class="layer-panel-title">Layers</div>
+                    <button class="layer-btn active" data-level="1" title="Level 1: Boundary"><span class="layer-dot" style="background:#e74c3c"></span>L1</button>
+                    <button class="layer-btn active" data-level="2" title="Level 2: Inner Structures"><span class="layer-dot" style="background:#8e44ad"></span>L2</button>
+                    <button class="layer-btn active" data-level="3" title="Level 3: Fixtures"><span class="layer-dot" style="background:#2980b9"></span>L3</button>
+                    <button class="layer-btn active" data-level="4" title="Level 4: Aisles"><span class="layer-dot" style="background:#27ae60"></span>L4</button>
+                    <button class="layer-btn active" data-level="5" title="Level 5: Areas"><span class="layer-dot" style="background:#f39c12"></span>L5</button>
+                </div>
                 <div id="northIndicator">
                     <span class="north-arrow">&#x25B2;</span>
                     <span>N</span>
@@ -79,6 +92,9 @@
             <div id="divider"></div>
 
             <div id="imagePanel">
+                <div id="attributesPanel" style="display:none">
+                    <div id="attributesPanelContent"></div>
+                </div>
                 <div id="imageHeader">
                     <button id="prevBtn">&larr;</button>
                     <span class="elapsed-time" id="elapsedTime"></span>
@@ -116,10 +132,12 @@
                 <tr><td>Space</td><td>Play / Pause</td></tr>
                 <tr><td>M</td><td>Toggle map</td></tr>
                 <tr><td>C</td><td>Toggle cameras</td></tr>
-                <tr><td>A</td><td>Toggle annotation mode</td></tr>
                 <tr><td>B</td><td>Toggle box draw mode</td></tr>
+                <tr><td>P</td><td>Toggle polygon draw mode</td></tr>
                 <tr><td>G</td><td>Toggle companion mode</td></tr>
-                <tr><td>Escape</td><td>Deselect camera</td></tr>
+                <tr><td>Ctrl+Z</td><td>Undo</td></tr>
+                <tr><td>Ctrl+Y / Ctrl+Shift+Z</td><td>Redo</td></tr>
+                <tr><td>Escape</td><td>Deselect camera / cancel polygon</td></tr>
                 <tr><td>?</td><td>Toggle this help</td></tr>
             </table>
             <h2 style="margin-top:16px">Mouse Controls</h2>
@@ -134,15 +152,18 @@
             </table>
             <h2 style="margin-top:16px">Annotation Mode</h2>
             <table>
-                <tr><td>Click "Annotate"</td><td>Toggle annotation mode</td></tr>
                 <tr><td>Ctrl + Drag (map)</td><td>Draw rectangle annotation</td></tr>
-                <tr><td>Click box</td><td>Select / deselect annotation</td></tr>
-                <tr><td>Click × on selected box</td><td>Delete annotation</td></tr>
+                <tr><td>B</td><td>Box draw mode (no Ctrl needed)</td></tr>
+                <tr><td>P</td><td>Polygon draw mode</td></tr>
+                <tr><td>Click (polygon mode)</td><td>Add polygon vertex</td></tr>
+                <tr><td>Double-click (polygon mode)</td><td>Close &amp; finish polygon</td></tr>
+                <tr><td>Click near start vertex</td><td>Auto-close polygon</td></tr>
+                <tr><td>Click box/polygon</td><td>Select / deselect annotation</td></tr>
+                <tr><td>Click × on selected</td><td>Delete annotation</td></tr>
                 <tr><td>X</td><td>Delete selected annotation</td></tr>
-                <tr><td>Escape</td><td>Deselect annotation</td></tr>
-                <tr><td>Enter angle + "Rotate"</td><td>Rotate all data around center</td></tr>
-                <tr><td>"Export PNG"</td><td>Download the rotated map without annotations</td></tr>
-                <tr><td>"Save JSON"</td><td>Download annotated data</td></tr>
+                <tr><td>Ctrl+Z / Ctrl+Y</td><td>Undo / Redo</td></tr>
+                <tr><td>L1–L5 buttons</td><td>Toggle layer visibility</td></tr>
+                <tr><td>Escape</td><td>Deselect / cancel polygon</td></tr>
             </table>
             <button class="close-help" onclick="document.getElementById('helpOverlay').classList.remove('visible')">Close</button>
         </div>
@@ -218,6 +239,6 @@
         });
         {% endif %}
     </script>
-    <script src="/static/store_layout/viewer.js"></script>
+    <script src="/static/store_layout/viewer.js?v=2"></script>
 </body>
 </html>

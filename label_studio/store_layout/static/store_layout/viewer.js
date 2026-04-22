@@ -235,9 +235,9 @@ class StoreLayoutViewer {
         this.showDebugMatches = false;
         this.debugConnectionSource = 'tracks';
 
-        // Annotation mode state
-        this.annotationMode = false;
-        this.annotations = [];         // [{id, x, y, width, height, label}] in world coords
+        // Annotation mode state — always on
+        this.annotationMode = true;
+        this.annotations = [];         // [{id, type, x, y, width, height, label, attribute, level, attributes}] in world coords
         this.rotationAngle = 0;        // cumulative rotation in degrees
         this.nextAnnotationId = 1;
         this.selectedAnnotation = null; // id of currently selected annotation box
@@ -247,6 +247,7 @@ class StoreLayoutViewer {
         this.configuredLabels = [];     // loaded from labels.yaml
         this.configuredLabelGroups = {}; // { groupName: [labels] } from labels.yaml
         this.configuredLabelGroupNames = []; // ordered group names
+        this.configuredLabelGroupMeta = {};  // { groupName: {type, level, color} } from label_metadata
         this.categoryColorPalette = [
             '#FF0000', '#00FF00', '#0000FF', '#FFFF00',
             '#FF00FF', '#00FFFF', '#FFA500', '#800080',
@@ -255,10 +256,25 @@ class StoreLayoutViewer {
         ];
         this.categoryColorAssignments = new Map();
         this.pendingBox = null;         // box awaiting label selection
+        this.pendingPolygon = null;     // polygon awaiting label selection
         this.isDraggingAnnotation = false;
         this.dragAnnotationId = null;
         this.dragAnnotationOffset = null; // {dx, dy} offset from box origin to grab point
         this.hasUnsavedChanges = false;
+
+        // Polygon draw mode state
+        this.isDrawingPolygon = false;
+        this.polygonCurrentVertices = []; // [{x,y}] world coords being drawn
+        this.polygonSnapThreshold = 15;   // pixels to snap-to-start
+        this.polygonMouseWorld = null;    // current mouse position while drawing
+
+        // History (undo/redo)
+        this.historyStack = [];
+        this.historyIndex = -1;
+        this.historyMaxSize = 50;
+
+        // Layer visibility per level (1-5)
+        this.layerVisibility = {1: true, 2: true, 3: true, 4: true, 5: true};
 
         // Companion mode state
         this.companionMode = false;
@@ -474,12 +490,25 @@ class StoreLayoutViewer {
 
         // Load saved annotations and rotation state
         if (Array.isArray(data.annotations)) {
-            this.annotations = data.annotations.map(a => ({ ...a }));
+            this.annotations = data.annotations.map(a => {
+                // Backward-compat: ensure type and level fields exist
+                const ann = { ...a };
+                if (!ann.type) ann.type = 'bbox';
+                if (ann.level == null) {
+                    ann.level = this.getLevelForGroup(ann.attribute);
+                }
+                if (!ann.attributes) ann.attributes = {};
+                return ann;
+            });
             this.nextAnnotationId = this.annotations.reduce((max, a) => Math.max(max, (a.id || 0) + 1), 1);
         }
         if (typeof data.rotationApplied === 'number') {
             this.rotationAngle = data.rotationApplied;
         }
+
+        // Initialize undo/redo history from loaded state
+        this.historyStack = [JSON.parse(JSON.stringify(this.annotations))];
+        this.historyIndex = 0;
 
         // Restore manual companion tracking from loaded cameras
         this.manualCompanions = this.cameras.filter(c => c.isManualCompanion);
@@ -1500,6 +1529,8 @@ class StoreLayoutViewer {
         this.updateFOVWedge();
         this.updateMatchLines();
         this.updateScaleBar();
+        // Re-render annotation overlays (bbox + polygons) when view changes
+        this.renderAnnotationBoxes();
     }
 
     screenToWorld(screenX, screenY) {
@@ -2952,10 +2983,11 @@ class StoreLayoutViewer {
         btn.classList.toggle('active', this.calibrationMode);
 
         if (this.calibrationMode) {
-            // Exit annotation mode if active
-            if (this.annotationMode) {
-                this.toggleAnnotationMode();
-            }
+            // Cancel any in-progress annotation drawing when entering calibration
+            if (this.isDrawingPolygon) this.cancelPolygon();
+            this.isDrawingBox = false;
+            this.isBoxDrawMode = false;
+            this.drawStartWorld = null;
             this.calibrationPoints = [];
             this.canvas.style.cursor = 'crosshair';
         } else {
@@ -3202,39 +3234,15 @@ class StoreLayoutViewer {
     // ========================================================================
 
     toggleAnnotationMode() {
-        this.annotationMode = !this.annotationMode;
-        const btn = document.getElementById('annotationModeBtn');
-        const controls = document.getElementById('annotationControls');
-
-        // Exit calibration mode if entering annotation mode
-        if (this.annotationMode && this.calibrationMode) {
-            this.calibrationMode = false;
-            this.calibrationPoints = [];
-            document.getElementById('calibrateBtn').classList.remove('active');
-        }
-
-        btn.classList.toggle('active', this.annotationMode);
-        controls.style.display = this.annotationMode ? 'flex' : 'none';
-        document.getElementById('companionModeBtn').style.display = this.annotationMode ? '' : 'none';
-
-        // Exit companion mode when leaving annotation mode
-        if (!this.annotationMode && this.companionMode) {
-            this.companionMode = false;
-            document.getElementById('companionModeBtn').classList.remove('active');
-            const dialog = document.getElementById('companionDialog');
-            if (dialog) dialog.remove();
-        }
-
-        // Cancel any in-progress drawing
+        // Annotation mode is always on. This method now only cancels any in-progress drawing.
+        if (this.isDrawingPolygon) this.cancelPolygon();
         this.isDrawingBox = false;
         this.drawStartWorld = null;
         this.isBoxDrawMode = false;
         this.canvas.style.cursor = 'grab';
         this.drawCurrentWorld = null;
-        if (!this.annotationMode) {
-            this.selectedAnnotation = null;
-        }
         this.renderAnnotationBoxes();
+        this.updateUndoRedoButtons();
     }
 
     // ========================================================================
@@ -3445,43 +3453,64 @@ class StoreLayoutViewer {
             if (!resp.ok) return;
             const text = await resp.text();
             const lines = text.split('\n');
-            let inLabels = false;
+            let section = null; // 'labels' | 'label_metadata' | null
             let currentGroup = null;
+            let currentMetaGroup = null;
             const groups = {};
             const groupOrder = [];
             const flatLabels = [];
+            const groupMeta = {};
 
             for (const line of lines) {
                 const trimmed = line.trim();
                 if (trimmed === '' || trimmed.startsWith('#')) continue;
-                if (/^labels\s*:/.test(trimmed)) { inLabels = true; continue; }
-                if (!inLabels) continue;
-                // Non-indented line after labels: -> end of labels block
-                if (!line.startsWith(' ') && !line.startsWith('\t')) { inLabels = false; continue; }
+                if (/^labels\s*:/.test(trimmed)) { section = 'labels'; currentGroup = null; continue; }
+                if (/^label_metadata\s*:/.test(trimmed)) { section = 'label_metadata'; currentMetaGroup = null; continue; }
+                // Top-level non-indented key resets section
+                if (!line.startsWith(' ') && !line.startsWith('\t')) { section = null; continue; }
 
-                // Check for group header (e.g. "  location:")
-                const groupMatch = line.match(/^(\s{2,4}|\t)(\w[\w\s]*\w|\w+)\s*:\s*$/);
-                if (groupMatch) {
-                    currentGroup = groupMatch[2].trim();
-                    if (!groups[currentGroup]) {
-                        groups[currentGroup] = [];
-                        groupOrder.push(currentGroup);
+                if (section === 'labels') {
+                    // Group header: "  fixture:" (2-4 spaces + word + colon)
+                    const groupMatch = line.match(/^[ \t]{2,4}([\w][\w\s-]*):\s*$/);
+                    if (groupMatch) {
+                        currentGroup = groupMatch[1].trim();
+                        if (!groups[currentGroup]) {
+                            groups[currentGroup] = [];
+                            groupOrder.push(currentGroup);
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                // List item under a group or flat
-                const itemMatch = line.match(/^\s*-\s+(.+)$/);
-                if (itemMatch) {
-                    const label = itemMatch[1].trim();
-                    if (currentGroup) {
-                        groups[currentGroup].push(label);
+                    // List item
+                    const itemMatch = line.match(/^\s*-\s+(.+)$/);
+                    if (itemMatch) {
+                        const label = itemMatch[1].trim();
+                        if (currentGroup) groups[currentGroup].push(label);
+                        flatLabels.push(label);
                     }
-                    flatLabels.push(label);
+                } else if (section === 'label_metadata') {
+                    // Group header (2 spaces): "  boundary:"
+                    const groupMatch = line.match(/^  ([\w][\w\s-]*):\s*$/);
+                    if (groupMatch) {
+                        currentMetaGroup = groupMatch[1].trim();
+                        if (!groupMeta[currentMetaGroup]) groupMeta[currentMetaGroup] = {};
+                        continue;
+                    }
+                    // Key-value pair (4 spaces): "    type: polygon"
+                    if (currentMetaGroup) {
+                        const kvMatch = line.match(/^ {4,}([\w]+)\s*:\s*'?"?([^'"\n]+)'?"?\s*$/);
+                        if (kvMatch) {
+                            const key = kvMatch[1].trim();
+                            let val = kvMatch[2].trim();
+                            if (key === 'level') val = parseInt(val, 10);
+                            groupMeta[currentMetaGroup][key] = val;
+                        }
+                    }
                 }
             }
 
             this.configuredLabelGroups = groups;
             this.configuredLabelGroupNames = groupOrder;
+            this.configuredLabelGroupMeta = groupMeta;
 
             // Merge with localStorage custom labels
             let customLabels = [];
@@ -3658,7 +3687,12 @@ class StoreLayoutViewer {
             : '';
 
         let accentColor = null;
-        if (normalizedAttribute === 'category') {
+
+        // Check group metadata color first (new label_metadata schema)
+        const meta = this.configuredLabelGroupMeta && this.configuredLabelGroupMeta[normalizedAttribute];
+        if (meta && meta.color) {
+            accentColor = meta.color;
+        } else if (normalizedAttribute === 'category') {
             accentColor = this.getCategoryColor(label);
         } else if (normalizedAttribute === 'location') {
             accentColor = this.getLocationColor(label);
@@ -3823,7 +3857,11 @@ class StoreLayoutViewer {
             requestAnimationFrame(clampPickerPosition);
         };
 
-        const groupNames = this.configuredLabelGroupNames;
+        const groupNames = this.configuredLabelGroupNames.filter(g => {
+            // Exclude pure attribute groups (level 6) from the label picker tabs
+            const meta = this.configuredLabelGroupMeta && this.configuredLabelGroupMeta[g];
+            return !(meta && meta.type === 'attribute');
+        });
         const hasGroups = groupNames.length > 0;
         if (!hasGroups) picker.classList.add('label-picker--no-tabs');
         let activeTabIndex = 0;
@@ -3835,6 +3873,13 @@ class StoreLayoutViewer {
             return this.configuredLabelGroups[groupNames[activeTabIndex]] || [];
         };
 
+        // Helper: type icon for group
+        const getTypeIcon = (groupName) => {
+            const meta = this.configuredLabelGroupMeta && this.configuredLabelGroupMeta[groupName];
+            if (meta && meta.type === 'polygon') return '⬡ ';
+            return '□ ';
+        };
+
         // --- Tab bar ---
         let tabBar = null;
         if (hasGroups) {
@@ -3843,7 +3888,13 @@ class StoreLayoutViewer {
             for (let t = 0; t < groupNames.length; t++) {
                 const tab = document.createElement('button');
                 tab.className = 'label-picker-tab' + (t === 0 ? ' active' : '');
-                tab.textContent = groupNames[t];
+                const meta = this.configuredLabelGroupMeta && this.configuredLabelGroupMeta[groupNames[t]];
+                const levelStr = meta && meta.level ? `L${meta.level}` : groupNames[t];
+                tab.textContent = levelStr;
+                tab.title = (meta && meta.level ? `L${meta.level}: ` : '') + groupNames[t];
+                if (meta && meta.color) {
+                    tab.style.setProperty('--tab-color', meta.color);
+                }
                 tab.dataset.tabIndex = t;
                 tab.addEventListener('click', (e) => {
                     e.stopPropagation();
@@ -3863,6 +3914,8 @@ class StoreLayoutViewer {
                 const panel = document.createElement('div');
                 panel.className = 'label-picker-panel' + (t === 0 ? ' active' : '');
                 const labels = this.configuredLabelGroups[groupNames[t]] || [];
+                const groupMeta = this.configuredLabelGroupMeta && this.configuredLabelGroupMeta[groupNames[t]];
+                const typeIcon = groupMeta && groupMeta.type === 'polygon' ? '⬡' : '□';
                 for (let i = 0; i < labels.length; i++) {
                     const label = labels[i];
                     const btn = document.createElement('button');
@@ -3871,7 +3924,12 @@ class StoreLayoutViewer {
                     const numSpan = document.createElement('span');
                     numSpan.className = 'label-picker-num';
                     numSpan.textContent = `${i + 1}`;
+                    const iconSpan = document.createElement('span');
+                    iconSpan.className = 'label-picker-type-icon';
+                    iconSpan.textContent = typeIcon;
+                    iconSpan.style.cssText = 'margin-right:4px;opacity:0.6;font-size:10px;';
                     btn.appendChild(numSpan);
+                    btn.appendChild(iconSpan);
                     btn.appendChild(document.createTextNode(label));
                     btn.addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -3990,23 +4048,61 @@ class StoreLayoutViewer {
             this._labelPickerKeyHandler = null;
         }
         this.pendingBox = null;
+        this.pendingPolygon = null;
     }
 
     commitPendingBox(label, attribute) {
-        if (this.pendingBox) {
-            const { x, y, width, height } = this.pendingBox;
-            this.annotations.push({
+        this.pushHistory();
+        const level = this.getLevelForGroup(attribute);
+
+        if (this.pendingPolygon) {
+            const { vertices } = this.pendingPolygon;
+            // Boundary: enforce uniqueness
+            if (label === 'Boundary') {
+                this.annotations = this.annotations.filter(
+                    a => !(a.type === 'polygon' && a.label === 'Boundary')
+                );
+            }
+            const newAnn = {
                 id: this.nextAnnotationId++,
+                type: 'polygon',
+                vertices,
+                label: label || '',
+                attribute: attribute || '',
+                level,
+                attributes: {}
+            };
+            this.annotations.push(newAnn);
+            if (!this.checkBoundaryConstraint(newAnn)) {
+                console.warn('Annotation extends outside Boundary');
+            }
+        } else if (this.pendingBox) {
+            const { x, y, width, height } = this.pendingBox;
+            const attrs = {};
+            // Auto-number Shelf
+            if (label === 'Shelf' || label === 'Wall shelf') {
+                attrs.shelfNumber = this.getNextShelfNumber();
+                attrs.side = 'Both';
+            }
+            const newAnn = {
+                id: this.nextAnnotationId++,
+                type: 'bbox',
                 x, y, width, height,
                 label: label || '',
-                attribute: attribute || ''
-            });
+                attribute: attribute || '',
+                level,
+                attributes: attrs
+            };
+            this.annotations.push(newAnn);
+            if (!this.checkBoundaryConstraint(newAnn)) {
+                console.warn('Annotation extends outside Boundary');
+            }
             // Persist any new custom label
             if (label && !this.configuredLabels.includes(label)) {
                 this.saveCustomLabel(label);
             }
-            this.hasUnsavedChanges = true;
         }
+        this.hasUnsavedChanges = true;
         this.isBoxDrawMode = false;
         this.canvas.style.cursor = 'grab';
         this.hideLabelPicker();
@@ -4016,6 +4112,8 @@ class StoreLayoutViewer {
 
     cancelPendingBox() {
         this.isBoxDrawMode = false;
+        this.isDrawingPolygon = false;
+        this.polygonCurrentVertices = [];
         this.canvas.style.cursor = 'grab';
         this.hideLabelPicker();
         this.renderAnnotationBoxes();
@@ -4065,11 +4163,22 @@ class StoreLayoutViewer {
 
         // Rotate annotation boxes (rotate center point, keep width/height unchanged)
         for (const box of this.annotations) {
-            const cx = box.x + box.width / 2;
-            const cy = box.y + box.height / 2;
-            const [ncx, ncy] = rotate(cx, cy);
-            box.x = ncx - box.width / 2;
-            box.y = ncy - box.height / 2;
+            if (box.type === 'polygon') {
+                // Rotate polygon vertices
+                if (Array.isArray(box.vertices)) {
+                    for (const v of box.vertices) {
+                        const [nx, ny] = rotate(v[0], v[1]);
+                        v[0] = nx;
+                        v[1] = ny;
+                    }
+                }
+            } else {
+                const bcx = box.x + box.width / 2;
+                const bcy = box.y + box.height / 2;
+                const [ncx, ncy] = rotate(bcx, bcy);
+                box.x = ncx - box.width / 2;
+                box.y = ncy - box.height / 2;
+            }
         }
 
         this.rotationAngle += angleDeg;
@@ -4117,11 +4226,15 @@ class StoreLayoutViewer {
 
         // Remove existing annotation box elements (keep map-annotation labels)
         layer.querySelectorAll('.annotation-box').forEach(el => el.remove());
+        // Remove polygon vertex handles
+        layer.querySelectorAll('.polygon-vertex-handle').forEach(el => el.remove());
 
         const fragment = document.createDocumentFragment();
 
-        // Render saved annotation boxes
+        // Render saved annotation boxes (skip polygons — handled by renderPolygons)
         for (const box of this.annotations) {
+            if (box.type === 'polygon') continue;
+            if (!this.isAnnotationVisible(box)) continue;
             const el = this.createAnnotationBoxElement(box);
             if (el) fragment.appendChild(el);
         }
@@ -4154,6 +4267,12 @@ class StoreLayoutViewer {
         }
 
         layer.appendChild(fragment);
+
+        // Render polygons (separate SVG layer)
+        this.renderPolygons();
+
+        // Update attributes panel
+        this.updateAttributesPanel();
     }
 
     createAnnotationBoxElement(box) {
@@ -4218,10 +4337,6 @@ class StoreLayoutViewer {
             deleteBtn.title = 'Delete annotation';
             deleteBtn.addEventListener('mousedown', (e) => {
                 if (e.button !== 0) return;
-                e.stopPropagation();
-                e.preventDefault();
-            });
-            deleteBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 e.preventDefault();
                 this.deleteAnnotation(box.id);
@@ -4342,6 +4457,7 @@ class StoreLayoutViewer {
         const ann = this.annotations.find(a => a.id === id);
         const name = ann && ann.label ? `"${ann.label}"` : `#${id}`;
         if (!confirm(`Delete annotation ${name}?`)) return;
+        this.pushHistory();
         if (this.selectedAnnotation === id) this.selectedAnnotation = null;
         this.annotations = this.annotations.filter(a => a.id !== id);
         this.hasUnsavedChanges = true;
@@ -4350,11 +4466,16 @@ class StoreLayoutViewer {
     }
 
     hitTestAnnotation(wx, wy) {
-        // Return the id of the topmost annotation whose bounding box contains (wx, wy), or null.
+        // Return the id of the topmost annotation containing (wx, wy), or null.
         for (let i = this.annotations.length - 1; i >= 0; i--) {
             const a = this.annotations[i];
-            if (wx >= a.x && wx <= a.x + a.width && wy >= a.y && wy <= a.y + a.height) {
-                return a.id;
+            if (!this.isAnnotationVisible(a)) continue;
+            if (a.type === 'polygon') {
+                if (Array.isArray(a.vertices) && this.pointInPolygon(wx, wy, a.vertices)) return a.id;
+            } else {
+                if (wx >= a.x && wx <= a.x + a.width && wy >= a.y && wy <= a.y + a.height) {
+                    return a.id;
+                }
             }
         }
         return null;
@@ -4828,11 +4949,6 @@ class StoreLayoutViewer {
                 if (e.key === 'Escape') this.cancelCalibration();
             });
 
-            // Annotation mode toggle
-            document.getElementById('annotationModeBtn').addEventListener('click', () => {
-                this.toggleAnnotationMode();
-            });
-
             const rotationSlider = document.getElementById('rotationSlider');
             const rotationValue = document.getElementById('rotationValue');
             let sliderPrevValue = 0;
@@ -4855,6 +4971,26 @@ class StoreLayoutViewer {
             });
             document.getElementById('rotatePlusBtn').addEventListener('click', () => {
                 this.applyRotation(1);
+            });
+
+            // Polygon mode button
+            const polygonModeBtn = document.getElementById('polygonModeBtn');
+            if (polygonModeBtn) {
+                polygonModeBtn.addEventListener('click', () => this.togglePolygonDrawMode());
+            }
+
+            // Undo / Redo buttons
+            const undoBtn = document.getElementById('undoBtn');
+            const redoBtn = document.getElementById('redoBtn');
+            if (undoBtn) undoBtn.addEventListener('click', () => this.undo());
+            if (redoBtn) redoBtn.addEventListener('click', () => this.redo());
+
+            // Layer visibility toggle buttons
+            document.querySelectorAll('.layer-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const level = parseInt(btn.dataset.level, 10);
+                    this.toggleLayer(level);
+                });
             });
 
             document.getElementById('exportMapPngBtn').addEventListener('click', () => {
@@ -4916,6 +5052,13 @@ class StoreLayoutViewer {
 
         const world = this.screenToWorld(e.clientX, e.clientY);
 
+        // Polygon draw mode: click to add vertex
+        if (this.annotationMode && this.isDrawingPolygon && e.button === 0) {
+            e.preventDefault();
+            this.addPolygonVertex(world.x, world.y);
+            return;
+        }
+
         if (this.annotationMode && e.button === 0 && this.selectedAnnotation !== null) {
             const hitAnnotation = this.hitTestAnnotation(world.x, world.y);
             if (hitAnnotation === null) {
@@ -4950,6 +5093,13 @@ class StoreLayoutViewer {
     }
 
     onMapMouseMove(e) {
+        // Polygon draw mode: update live preview
+        if (this.isDrawingPolygon) {
+            this.polygonMouseWorld = this.screenToWorld(e.clientX, e.clientY);
+            this.renderPolygons();
+            return;
+        }
+
         // Annotation mode: update box preview while drawing
         if (this.isDrawingBox) {
             this.drawCurrentWorld = this.screenToWorld(e.clientX, e.clientY);
@@ -5048,6 +5198,13 @@ class StoreLayoutViewer {
     }
 
     onMapDoubleClick(e) {
+        // Finish polygon on double-click
+        if (this.annotationMode && this.isDrawingPolygon) {
+            e.preventDefault();
+            this.finishPolygon(e.clientX, e.clientY);
+            return;
+        }
+
         const world = this.screenToWorld(e.clientX, e.clientY);
         const hitCamera = this.hitTestCamera(world.x, world.y);
         if (hitCamera === null) {
@@ -5360,20 +5517,45 @@ class StoreLayoutViewer {
                 this.render();
                 break;
 
-            case 'a':
-            case 'A':
-                if (!this.readOnly) this.toggleAnnotationMode();
-                break;
-
             case 'b':
             case 'B':
                 if (!this.readOnly && this.annotationMode) {
                     this.isBoxDrawMode = !this.isBoxDrawMode;
+                    if (this.isBoxDrawMode) this.isDrawingPolygon = false;
                     this.canvas.style.cursor = this.isBoxDrawMode ? 'crosshair' : 'grab';
+                    const polyBtn = document.getElementById('polygonModeBtn');
+                    if (polyBtn) polyBtn.classList.remove('active');
+                }
+                break;
+
+            case 'p':
+            case 'P':
+                if (!this.readOnly && this.annotationMode) {
+                    this.togglePolygonDrawMode();
+                }
+                break;
+
+            case 'z':
+            case 'Z':
+                if (!this.readOnly && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    if (e.shiftKey) this.redo(); else this.undo();
+                }
+                break;
+
+            case 'y':
+            case 'Y':
+                if (!this.readOnly && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    this.redo();
                 }
                 break;
 
             case 'Escape':
+                if (this.isDrawingPolygon) {
+                    this.cancelPolygon();
+                    break;
+                }
                 if (this.companionMode) {
                     this.toggleCompanionMode();
                     const dialog = document.getElementById('companionDialog');
@@ -5481,6 +5663,557 @@ class StoreLayoutViewer {
             divider.classList.remove('active');
         });
     }
+
+    // ========================================================================
+    // Level / Layer Helpers
+    // ========================================================================
+
+    getLevelForGroup(groupName) {
+        const meta = this.configuredLabelGroupMeta && this.configuredLabelGroupMeta[groupName];
+        if (meta && meta.level != null) return meta.level;
+        // Legacy fallback
+        const map = { boundary: 1, 'inner-structure': 2, fixture: 3, aisle: 4, area: 5, category: 6, location: 3 };
+        return map[groupName] || 3;
+    }
+
+    isAnnotationVisible(ann) {
+        const level = ann.level != null ? ann.level : 3;
+        return this.layerVisibility[level] !== false;
+    }
+
+    toggleLayer(level) {
+        this.layerVisibility[level] = !this.layerVisibility[level];
+        document.querySelectorAll(`.layer-btn[data-level="${level}"]`).forEach(btn => {
+            btn.classList.toggle('active', this.layerVisibility[level]);
+        });
+        this.renderAnnotationBoxes();
+        this.renderMapLegend();
+    }
+
+    pointInPolygon(px, py, vertices) {
+        // Ray-casting algorithm
+        if (!vertices || vertices.length < 3) return false;
+        let inside = false;
+        for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+            const xi = vertices[i][0], yi = vertices[i][1];
+            const xj = vertices[j][0], yj = vertices[j][1];
+            const intersect = ((yi > py) !== (yj > py)) &&
+                (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    }
+
+    // ========================================================================
+    // History (Undo / Redo)
+    // ========================================================================
+
+    pushHistory() {
+        // Truncate redo history
+        this.historyStack = this.historyStack.slice(0, this.historyIndex + 1);
+        // Push snapshot
+        this.historyStack.push(JSON.parse(JSON.stringify(this.annotations)));
+        if (this.historyStack.length > this.historyMaxSize) {
+            this.historyStack.shift();
+        }
+        this.historyIndex = this.historyStack.length - 1;
+        this.updateUndoRedoButtons();
+    }
+
+    undo() {
+        if (this.historyIndex <= 0) return;
+        this.historyIndex--;
+        this.annotations = JSON.parse(JSON.stringify(this.historyStack[this.historyIndex]));
+        this.nextAnnotationId = this.annotations.reduce((max, a) => Math.max(max, (a.id || 0) + 1), this.nextAnnotationId);
+        if (this.selectedAnnotation !== null && !this.annotations.find(a => a.id === this.selectedAnnotation)) {
+            this.selectedAnnotation = null;
+        }
+        this.hasUnsavedChanges = true;
+        this.updateUndoRedoButtons();
+        this.renderAnnotationBoxes();
+        this.renderMapLegend();
+    }
+
+    redo() {
+        if (this.historyIndex >= this.historyStack.length - 1) return;
+        this.historyIndex++;
+        this.annotations = JSON.parse(JSON.stringify(this.historyStack[this.historyIndex]));
+        this.nextAnnotationId = this.annotations.reduce((max, a) => Math.max(max, (a.id || 0) + 1), this.nextAnnotationId);
+        this.hasUnsavedChanges = true;
+        this.updateUndoRedoButtons();
+        this.renderAnnotationBoxes();
+        this.renderMapLegend();
+    }
+
+    updateUndoRedoButtons() {
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+        if (undoBtn) undoBtn.disabled = this.historyIndex <= 0;
+        if (redoBtn) redoBtn.disabled = this.historyIndex >= this.historyStack.length - 1;
+    }
+
+    // ========================================================================
+    // Polygon Engine
+    // ========================================================================
+
+    togglePolygonDrawMode() {
+        this.isDrawingPolygon = !this.isDrawingPolygon;
+        const btn = document.getElementById('polygonModeBtn');
+        if (this.isDrawingPolygon) {
+            this.isBoxDrawMode = false;
+            this.polygonCurrentVertices = [];
+            this.polygonMouseWorld = null;
+            this.canvas.style.cursor = 'crosshair';
+            if (btn) btn.classList.add('active');
+        } else {
+            this.cancelPolygon();
+        }
+    }
+
+    cancelPolygon() {
+        this.isDrawingPolygon = false;
+        this.polygonCurrentVertices = [];
+        this.polygonMouseWorld = null;
+        this.canvas.style.cursor = 'grab';
+        const btn = document.getElementById('polygonModeBtn');
+        if (btn) btn.classList.remove('active');
+        this.renderPolygons();
+    }
+
+    addPolygonVertex(wx, wy) {
+        const verts = this.polygonCurrentVertices;
+        // Check snap-to-start (close polygon)
+        if (verts.length >= 3) {
+            const snap = this.snapToPolygonStart(wx, wy);
+            if (snap) {
+                this.finishPolygonWithVertices(verts);
+                return;
+            }
+        }
+        verts.push([wx, wy]);
+        this.renderPolygons();
+    }
+
+    snapToPolygonStart(wx, wy) {
+        if (this.polygonCurrentVertices.length < 3) return false;
+        const first = this.polygonCurrentVertices[0];
+        const snap = this.worldToScreen(first[0], first[1]);
+        const cur = this.worldToScreen(wx, wy);
+        const dist = Math.hypot(snap.x - cur.x, snap.y - cur.y);
+        return dist < this.polygonSnapThreshold;
+    }
+
+    finishPolygon(screenX, screenY) {
+        const verts = this.polygonCurrentVertices;
+        if (verts.length < 3) {
+            this.cancelPolygon();
+            return;
+        }
+        this.finishPolygonWithVertices(verts);
+    }
+
+    finishPolygonWithVertices(vertices) {
+        const cloned = vertices.map(v => [v[0], v[1]]);
+        this.isDrawingPolygon = false;
+        this.polygonCurrentVertices = [];
+        this.polygonMouseWorld = null;
+        this.canvas.style.cursor = 'grab';
+        const btn = document.getElementById('polygonModeBtn');
+        if (btn) btn.classList.remove('active');
+
+        this.pendingPolygon = { vertices: cloned };
+        this.pendingBox = null;
+        // Show label picker at center of polygon bounding box
+        const xs = cloned.map(v => v[0]);
+        const ys = cloned.map(v => v[1]);
+        const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+        const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+        const sc = this.worldToScreen(cx, cy);
+        this.showLabelPicker(sc.x, sc.y);
+        this.renderPolygons();
+    }
+
+    renderPolygons() {
+        const layer = document.getElementById('mapAnnotationLayer');
+        if (!layer) return;
+
+        // Get or create SVG overlay
+        let svg = document.getElementById('annotationPolygonSVG');
+        if (!svg) {
+            svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.id = 'annotationPolygonSVG';
+            svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:50';
+            layer.appendChild(svg);
+        }
+        svg.innerHTML = '';
+
+        // Remove old vertex handles
+        layer.querySelectorAll('.polygon-vertex-handle').forEach(el => el.remove());
+
+        const mapPanel = document.getElementById('mapPanel');
+        const panelRect = mapPanel ? mapPanel.getBoundingClientRect() : null;
+
+        // Render saved polygons
+        for (const ann of this.annotations) {
+            if (ann.type !== 'polygon') continue;
+            if (!this.isAnnotationVisible(ann)) continue;
+            if (!ann.vertices || ann.vertices.length < 2) continue;
+            this.renderSavedPolygon(svg, layer, ann, panelRect);
+        }
+
+        // Render in-progress polygon drawing
+        if (this.isDrawingPolygon && this.polygonCurrentVertices.length > 0) {
+            this.renderDrawingPolygon(svg, layer, panelRect);
+        }
+
+        // Render pending polygon (waiting for label picker)
+        if (this.pendingPolygon && this.pendingPolygon.vertices) {
+            this.renderPendingPolygon(svg, this.pendingPolygon.vertices);
+        }
+    }
+
+    renderSavedPolygon(svg, layer, ann, panelRect) {
+        const verts = ann.vertices;
+        const screenVerts = verts.map(v => this.worldToScreen(v[0], v[1]));
+        const points = screenVerts.map(s => `${s.x},${s.y}`).join(' ');
+
+        const isSelected = ann.id === this.selectedAnnotation;
+        const theme = this.getLabelTheme(ann.label, ann.attribute);
+        const fillColor = theme ? this.hexToRgba(theme.accentColor, ann.attribute === 'area' ? 0.18 : 0.10) : 'rgba(100,100,255,0.1)';
+        const strokeColor = theme ? theme.accentColor : '#5050ff';
+        const strokeWidth = isSelected ? 2.5 : (ann.attribute === 'boundary' ? 0 : 1.5);
+
+        // Dashed outline for boundary
+        const isBoundary = ann.attribute === 'boundary' || ann.label === 'Boundary';
+        const dashArray = isBoundary ? '8,5' : 'none';
+        const boundaryStrokeColor = isBoundary ? '#e74c3c' : strokeColor;
+        const boundaryFill = isBoundary ? 'rgba(231,76,60,0.05)' : fillColor;
+
+        const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        polygon.setAttribute('points', points);
+        polygon.setAttribute('fill', boundaryFill);
+        polygon.setAttribute('stroke', isSelected ? '#f0a030' : boundaryStrokeColor);
+        polygon.setAttribute('stroke-width', isSelected ? '2.5' : (isBoundary ? '2.5' : strokeWidth));
+        if (isBoundary || isSelected) polygon.setAttribute('stroke-dasharray', isSelected ? '5,3' : (isBoundary ? '8,5' : 'none'));
+        polygon.style.pointerEvents = this.annotationMode ? 'all' : 'none';
+        polygon.style.cursor = this.annotationMode ? 'move' : 'default';
+
+        if (this.annotationMode) {
+            polygon.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                e.preventDefault();
+
+                const startWorld = this.screenToWorld(e.clientX, e.clientY);
+                const startVerts = ann.vertices.map(v => [v[0], v[1]]); // snapshot
+                const dragStart = { x: e.clientX, y: e.clientY };
+                let dragMoved = false;
+                let historyPushed = false;
+
+                const onMove = (me) => {
+                    const dx = me.clientX - dragStart.x;
+                    const dy = me.clientY - dragStart.y;
+                    if (!dragMoved && (dx * dx + dy * dy) > 9) {
+                        dragMoved = true;
+                        this.selectedAnnotation = ann.id;
+                        if (!historyPushed) { this.pushHistory(); historyPushed = true; }
+                    }
+                    if (dragMoved) {
+                        const curWorld = this.screenToWorld(me.clientX, me.clientY);
+                        const wdx = curWorld.x - startWorld.x;
+                        const wdy = curWorld.y - startWorld.y;
+                        ann.vertices = startVerts.map(v => [v[0] + wdx, v[1] + wdy]);
+                        this.renderAnnotationBoxes();
+                    }
+                };
+                const onUp = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    if (!dragMoved) {
+                        // No drag — toggle selection
+                        this.selectedAnnotation = this.selectedAnnotation === ann.id ? null : ann.id;
+                    } else {
+                        this.hasUnsavedChanges = true;
+                    }
+                    this.renderAnnotationBoxes();
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        }
+
+        svg.appendChild(polygon);
+
+        // Label text at centroid
+        const cx = screenVerts.reduce((s, v) => s + v.x, 0) / screenVerts.length;
+        const cy = screenVerts.reduce((s, v) => s + v.y, 0) / screenVerts.length;
+        if (ann.label) {
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', cx);
+            text.setAttribute('y', cy);
+            text.setAttribute('text-anchor', 'middle');
+            text.setAttribute('dominant-baseline', 'central');
+            text.setAttribute('font-size', '14');
+            text.setAttribute('font-weight', '700');
+            text.setAttribute('fill', '#ffffff');
+            text.setAttribute('paint-order', 'stroke');
+            text.setAttribute('stroke', theme ? theme.accentColor : '#5050ff');
+            text.setAttribute('stroke-width', '4');
+            text.style.pointerEvents = 'none';
+            text.textContent = ann.label;
+            svg.appendChild(text);
+        }
+
+        // Delete button for selected polygon — positioned at bounding-box top-right
+        if (isSelected && this.annotationMode) {
+            const bbMaxX = Math.max(...screenVerts.map(v => v.x));
+            const bbMinY = Math.min(...screenVerts.map(v => v.y));
+            const delBtn = document.createElement('span');
+            delBtn.className = 'annotation-delete polygon-vertex-handle';
+            delBtn.textContent = '×';
+            delBtn.title = 'Delete polygon';
+            delBtn.style.cssText = `left:${bbMaxX - 8}px;top:${bbMinY - 10}px;right:auto;z-index:102;`;
+            delBtn.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                e.preventDefault();
+                this.deleteAnnotation(ann.id);
+            });
+            layer.appendChild(delBtn);
+
+            // Vertex handles for editing
+            screenVerts.forEach((sv, idx) => {
+                const handle = document.createElement('div');
+                handle.className = 'polygon-vertex-handle';
+                handle.style.cssText = `
+                    left:${sv.x - 5}px; top:${sv.y - 5}px;
+                    width:10px; height:10px;
+                    background:#f0a030; border:2px solid #fff;
+                    border-radius:50%; cursor:move; z-index:103;
+                `;
+                handle.addEventListener('mousedown', (e) => {
+                    if (e.button !== 0) return;
+                    e.stopPropagation();
+                    e.preventDefault();
+                    this.pushHistory();
+                    const onMove = (me) => {
+                        const w = this.screenToWorld(me.clientX, me.clientY);
+                        ann.vertices[idx][0] = w.x;
+                        ann.vertices[idx][1] = w.y;
+                        this.renderAnnotationBoxes();
+                    };
+                    const onUp = () => {
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                        this.hasUnsavedChanges = true;
+                    };
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                });
+                layer.appendChild(handle);
+            });
+        }
+    }
+
+    renderDrawingPolygon(svg, layer, panelRect) {
+        const verts = this.polygonCurrentVertices;
+        const screenVerts = verts.map(v => this.worldToScreen(v[0], v[1]));
+        const mouseScreen = this.polygonMouseWorld ? this.worldToScreen(this.polygonMouseWorld.x, this.polygonMouseWorld.y) : null;
+
+        // Preview line to cursor
+        const allPts = [...screenVerts];
+        if (mouseScreen) allPts.push(mouseScreen);
+        if (allPts.length >= 2) {
+            const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+            polyline.setAttribute('points', allPts.map(p => `${p.x},${p.y}`).join(' '));
+            polyline.setAttribute('fill', 'none');
+            polyline.setAttribute('stroke', '#f39c12');
+            polyline.setAttribute('stroke-width', '1.5');
+            polyline.setAttribute('stroke-dasharray', '6,3');
+            polyline.style.pointerEvents = 'none';
+            svg.appendChild(polyline);
+        }
+
+        // Vertex dots
+        screenVerts.forEach((sv, idx) => {
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('cx', sv.x);
+            circle.setAttribute('cy', sv.y);
+            circle.setAttribute('r', idx === 0 ? 6 : 4);
+            circle.setAttribute('fill', idx === 0 ? '#e74c3c' : '#f39c12');
+            circle.setAttribute('stroke', '#fff');
+            circle.setAttribute('stroke-width', '1.5');
+            circle.style.pointerEvents = 'none';
+            svg.appendChild(circle);
+        });
+
+        // Snap indicator at first vertex when close enough
+        if (mouseScreen && verts.length >= 3) {
+            const isSnapping = this.snapToPolygonStart(this.polygonMouseWorld.x, this.polygonMouseWorld.y);
+            if (isSnapping) {
+                const snapCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                snapCircle.setAttribute('cx', screenVerts[0].x);
+                snapCircle.setAttribute('cy', screenVerts[0].y);
+                snapCircle.setAttribute('r', 10);
+                snapCircle.setAttribute('fill', 'none');
+                snapCircle.setAttribute('stroke', '#e74c3c');
+                snapCircle.setAttribute('stroke-width', '2');
+                snapCircle.style.pointerEvents = 'none';
+                svg.appendChild(snapCircle);
+            }
+        }
+    }
+
+    renderPendingPolygon(svg, vertices) {
+        const screenVerts = vertices.map(v => this.worldToScreen(v[0], v[1]));
+        const points = screenVerts.map(s => `${s.x},${s.y}`).join(' ');
+        const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        polygon.setAttribute('points', points);
+        polygon.setAttribute('fill', 'rgba(243,156,18,0.08)');
+        polygon.setAttribute('stroke', '#f39c12');
+        polygon.setAttribute('stroke-width', '1.5');
+        polygon.setAttribute('stroke-dasharray', '6,3');
+        polygon.style.pointerEvents = 'none';
+        svg.appendChild(polygon);
+    }
+
+    // ========================================================================
+    // Attributes Panel
+    // ========================================================================
+
+    updateAttributesPanel() {
+        const panel = document.getElementById('attributesPanel');
+        const content = document.getElementById('attributesPanelContent');
+        if (!panel || !content) return;
+
+        if (this.selectedAnnotation === null) {
+            panel.style.display = 'none';
+            return;
+        }
+
+        const ann = this.annotations.find(a => a.id === this.selectedAnnotation);
+        if (!ann || !this.annotationMode) {
+            panel.style.display = 'none';
+            return;
+        }
+
+        // If the user is interacting with an input/select inside the panel,
+        // skip rebuilding — re-render triggered by map pan/zoom would destroy
+        // the focused element and close any open native dropdowns.
+        if (panel.matches(':focus-within')) return;
+
+        panel.style.display = '';
+        content.innerHTML = '';
+
+        // Label header badge
+        const badge = document.createElement('div');
+        badge.className = 'attr-label-header';
+        const theme = this.getLabelTheme(ann.label, ann.attribute);
+        if (theme) {
+            badge.style.background = theme.accentColor;
+            badge.style.color = theme.labelTextColor || '#fff';
+        }
+        badge.textContent = ann.label || `#${ann.id}`;
+        content.appendChild(badge);
+
+        const attrs = ann.attributes || (ann.attributes = {});
+
+        // Category dropdown (for fixture group and aisle)
+        if (ann.attribute === 'fixture' || ann.attribute === 'aisle') {
+            const categoryLabels = this.getCategoryLabels();
+            if (categoryLabels.length > 0) {
+                content.appendChild(this.buildAttrSelect('category', 'Category', categoryLabels, attrs, ann));
+            }
+        }
+
+        // Shelf-specific fields
+        if (ann.label === 'Shelf' || ann.label === 'Wall shelf') {
+            content.appendChild(this.buildAttrInput('shelfNumber', 'Shelf #', 'number', attrs, ann));
+            content.appendChild(this.buildAttrSelect('side', 'Side', ['Both', 'Left', 'Right'], attrs, ann));
+        }
+
+        // Notes field for all
+        content.appendChild(this.buildAttrInput('notes', 'Notes', 'text', attrs, ann));
+    }
+
+    buildAttrInput(key, labelText, inputType, attrs, ann) {
+        const field = document.createElement('div');
+        field.className = 'attr-field';
+        const lbl = document.createElement('label');
+        lbl.textContent = labelText;
+        const inp = document.createElement('input');
+        inp.type = inputType;
+        inp.value = attrs[key] != null ? attrs[key] : '';
+        if (inputType === 'number') { inp.min = '0'; inp.step = '1'; inp.style.width = '60px'; }
+        inp.addEventListener('change', () => {
+            this.pushHistory();
+            attrs[key] = inputType === 'number' ? (parseFloat(inp.value) || 0) : inp.value;
+            this.hasUnsavedChanges = true;
+        });
+        field.appendChild(lbl);
+        field.appendChild(inp);
+        return field;
+    }
+
+    buildAttrSelect(key, labelText, options, attrs, ann) {
+        const field = document.createElement('div');
+        field.className = 'attr-field';
+        const lbl = document.createElement('label');
+        lbl.textContent = labelText;
+        const sel = document.createElement('select');
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = '—';
+        sel.appendChild(emptyOpt);
+        for (const opt of options) {
+            const o = document.createElement('option');
+            o.value = opt;
+            o.textContent = opt;
+            if (attrs[key] === opt) o.selected = true;
+            sel.appendChild(o);
+        }
+        sel.addEventListener('change', () => {
+            this.pushHistory();
+            attrs[key] = sel.value;
+            this.hasUnsavedChanges = true;
+        });
+        field.appendChild(lbl);
+        field.appendChild(sel);
+        return field;
+    }
+
+    // Auto-number for Shelf labels
+    getNextShelfNumber() {
+        let max = 0;
+        for (const a of this.annotations) {
+            if ((a.label === 'Shelf' || a.label === 'Wall shelf') && a.attributes && a.attributes.shelfNumber != null) {
+                max = Math.max(max, parseInt(a.attributes.shelfNumber, 10) || 0);
+            }
+        }
+        return max + 1;
+    }
+
+    // ========================================================================
+    // Boundary check (warn if annotation outside Boundary polygon)
+    // ========================================================================
+
+    checkBoundaryConstraint(ann) {
+        const boundary = this.annotations.find(a => a.type === 'polygon' && a.label === 'Boundary');
+        if (!boundary || !Array.isArray(boundary.vertices)) return true; // no boundary defined
+        if (ann.type === 'polygon') {
+            if (!ann.vertices) return true;
+            // All vertices must be inside boundary
+            return ann.vertices.every(v => this.pointInPolygon(v[0], v[1], boundary.vertices));
+        } else {
+            // BBox: check all four corners
+            const corners = [
+                [ann.x, ann.y], [ann.x + ann.width, ann.y],
+                [ann.x, ann.y + ann.height], [ann.x + ann.width, ann.y + ann.height]
+            ];
+            return corners.every(c => this.pointInPolygon(c[0], c[1], boundary.vertices));
+        }
+    }
+
 }
 
 // ============================================================================

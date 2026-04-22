@@ -586,6 +586,77 @@ input[type="checkbox"]:focus-visible {
 .scale-bar-line::before { left: -1px; }
 .scale-bar-line::after  { right: -1px; }
 
+/* Layer panel — left side of map */
+
+#layerPanel {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: rgba(30, 30, 38, 0.82);
+    padding: 8px 6px;
+    border-radius: 8px;
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(255,255,255,0.10);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.28);
+    pointer-events: all;
+}
+
+.layer-panel-title {
+    font-size: 9px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.45);
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 3px;
+}
+
+#layerPanel .layer-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 9px;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+    width: 100%;
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.50);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+#layerPanel .layer-btn.active {
+    background: rgba(255,255,255,0.18);
+    color: #fff;
+    border-color: rgba(255,255,255,0.30);
+}
+
+#layerPanel .layer-btn:hover {
+    background: rgba(255,255,255,0.22);
+    color: #fff;
+}
+
+.layer-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    opacity: 0.9;
+    transition: opacity 0.12s;
+}
+
+#layerPanel .layer-btn:not(.active) .layer-dot {
+    opacity: 0.35;
+}
+
 /* Map legend */
 
 #mapLegend {
@@ -905,10 +976,156 @@ input[type="checkbox"]:focus-visible {
     margin: 0 4px;
 }
 
+.layer-toggle-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-right: 2px;
+}
+
+.layer-btn {
+    padding: 2px 7px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: var(--bg-muted);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+}
+
+.layer-btn.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
+.layer-btn:hover:not(.active) {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+}
+
+#polygonModeBtn {
+    font-size: 11px;
+}
+
+#polygonModeBtn.active {
+    background: #8e44ad;
+    color: #fff;
+    border-color: #6c3483;
+}
+
+#undoBtn, #redoBtn {
+    font-size: 14px;
+    padding: 2px 7px;
+}
+
+#undoBtn:disabled, #redoBtn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
 #annotationModeBtn.active {
     background: var(--accent);
     color: #fff;
     border-color: var(--accent-2);
+}
+
+/* Polygon canvas overlay inside mapAnnotationLayer */
+#annotationPolygonSVG {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+}
+
+/* Vertex handles for polygon editing */
+.polygon-vertex-handle {
+    position: absolute;
+    z-index: 101;
+    pointer-events: all;
+}
+
+/* Polygon preview snap indicator */
+.polygon-snap-indicator {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 102;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 2px #e74c3c;
+}
+
+/* Attributes panel (inside imagePanel, collapsible) */
+#attributesPanel {
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
+    flex-shrink: 0;
+}
+
+#attributesPanel .attr-panel-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+}
+
+#attributesPanelContent {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.attr-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 90px;
+}
+
+.attr-field label {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.attr-field input,
+.attr-field select {
+    padding: 3px 6px;
+    font-size: 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: var(--bg-page);
+    color: var(--text-primary);
+    width: 100%;
+}
+
+.attr-field input:focus,
+.attr-field select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.attr-label-header {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--accent);
+    color: #fff;
+    margin-bottom: 4px;
+    display: inline-block;
 }
 
 #calibrateBtn.active {
@@ -1132,6 +1349,7 @@ input[type="checkbox"]:focus-visible {
     position: absolute;
     top: -18px;
     right: -4px;
+    pointer-events: auto;
     cursor: pointer;
     font-size: 18px;
     font-weight: 700;
@@ -1223,9 +1441,9 @@ input[type="checkbox"]:focus-visible {
 }
 
 .label-picker-tab.active {
-    background: var(--accent);
+    background: var(--tab-color, var(--accent));
     color: #fff;
-    border-color: var(--accent);
+    border-color: var(--tab-color, var(--accent));
 }
 
 /* Tab panels */
