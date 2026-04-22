@@ -290,10 +290,28 @@ class StoreLayoutViewer {
         // Loaded data file name (for save-back)
         this.loadedDataFileName = null;
 
+        // Performance: flat Float32Array for GPU upload (avoids flat() on every upload)
+        this.pointCloudBuffer = new Float32Array(0);
+        this.pointCount = 0;
+
+        // Performance: cached bounding box of all data — invalidated only on load/rotation
+        this._dataBoundsCache = null;
+
+        // Performance: O(1) camera lookup by id
+        this._cameraMap = new Map();
+
+        // Performance: rAF throttle for hover detection
+        this._pendingMouseMoveEvent = null;
+        this._rafMouseMoveScheduled = false;
+
+        // Performance: track overlay count to rebuild static color buffers only when needed
+        this._overlayBufferCount = 0;
+
         // WebGL resources
         this.pointProgram = null;
         this.cameraProgram = null;
         this.lineProgram = null;
+        this.locations = null; // cached uniform/attrib locations — populated in setupWebGL()
         this.pointBuffer = null;
         this.cameraBuffer = null;
         this.cameraColorBuffer = null;
@@ -306,6 +324,8 @@ class StoreLayoutViewer {
         this.selectedFovBuffer = null;
         this.overlayCameraBuffer = null;
         this.overlayColorBuffer = null;
+        this.overlayHaloColorBuffer = null;
+        this.overlayCoreColorBuffer = null;
 
         // Selected camera indicator animation (dot/direction/FOV)
         this.selectedIndicatorPose = null;
@@ -356,7 +376,31 @@ class StoreLayoutViewer {
         this.selectedFovBuffer = gl.createBuffer();
         this.overlayCameraBuffer = gl.createBuffer();
         this.overlayColorBuffer = gl.createBuffer();
+        // Separate static color buffers for halo / core overlay markers (uploaded once, reused every frame)
+        this.overlayHaloColorBuffer = gl.createBuffer();
+        this.overlayCoreColorBuffer = gl.createBuffer();
         this.matchLineBuffer = gl.createBuffer();
+
+        // Cache all shader uniform/attribute locations once — avoids 14+ GL state queries per frame.
+        this.locations = {
+            point: {
+                viewMatrix: gl.getUniformLocation(this.pointProgram, 'u_viewMatrix'),
+                pointSize:  gl.getUniformLocation(this.pointProgram, 'u_pointSize'),
+                color:      gl.getUniformLocation(this.pointProgram, 'u_color'),
+                position:   gl.getAttribLocation(this.pointProgram,  'a_position'),
+            },
+            camera: {
+                viewMatrix: gl.getUniformLocation(this.cameraProgram, 'u_viewMatrix'),
+                pointSize:  gl.getUniformLocation(this.cameraProgram, 'u_pointSize'),
+                position:   gl.getAttribLocation(this.cameraProgram,  'a_position'),
+                color:      gl.getAttribLocation(this.cameraProgram,  'a_color'),
+            },
+            line: {
+                viewMatrix: gl.getUniformLocation(this.lineProgram, 'u_viewMatrix'),
+                color:      gl.getUniformLocation(this.lineProgram, 'u_color'),
+                position:   gl.getAttribLocation(this.lineProgram,  'a_position'),
+            },
+        };
     }
 
     createShader(type, source) {
@@ -488,6 +532,22 @@ class StoreLayoutViewer {
         this.selectedCamera = null;
         this.hoveredCamera = null;
 
+        // Performance: build O(1) camera ID index
+        this._cameraMap = new Map(this.cameras.map(c => [c.id, c]));
+
+        // Performance: convert point cloud to flat Float32Array once — avoids .flat() on every GPU upload
+        const rawCloud = this.pointCloud;
+        this.pointCount = rawCloud.length;
+        if (this.pointCount > 0) {
+            this.pointCloudBuffer = new Float32Array(this.pointCount * 2);
+            for (let i = 0; i < this.pointCount; i++) {
+                this.pointCloudBuffer[i * 2]     = rawCloud[i][0];
+                this.pointCloudBuffer[i * 2 + 1] = rawCloud[i][1];
+            }
+        } else {
+            this.pointCloudBuffer = new Float32Array(0);
+        }
+
         // Load saved annotations and rotation state
         if (Array.isArray(data.annotations)) {
             this.annotations = data.annotations.map(a => {
@@ -608,6 +668,7 @@ class StoreLayoutViewer {
         }
 
         this.uploadPointCloud();
+        this._computeAndCacheBounds(); // pre-compute after load so all interaction paths use cache
         this.updateVisibleCameras();
         this.hasOverlayCameras = this.cameras.some(c => c.isOverlay);
         this.updateOverlayPulseAnimationState();
@@ -641,14 +702,36 @@ class StoreLayoutViewer {
 
     uploadPointCloud() {
         const gl = this.gl;
-        const data = new Float32Array(this.pointCloud.flat());
-
         gl.bindBuffer(gl.ARRAY_BUFFER, this.pointBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+        gl.bufferData(gl.ARRAY_BUFFER, this.pointCloudBuffer, gl.STATIC_DRAW);
+    }
+
+    // Compute and cache the world-space bounding box of cameras + point cloud.
+    // Must be called after load and after any rotation that modifies positions.
+    _computeAndCacheBounds() {
+        const cameras = this.cameras;
+        const buf = this.pointCloudBuffer;
+        if (cameras.length === 0 && buf.length === 0) {
+            this._dataBoundsCache = null;
+            return null;
+        }
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let i = 0; i < cameras.length; i++) {
+            const x = cameras[i].position[0], y = cameras[i].position[1];
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+        for (let i = 0; i < buf.length; i += 2) {
+            const x = buf[i], y = buf[i + 1];
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+        this._dataBoundsCache = { minX, minY, maxX, maxY };
+        return this._dataBoundsCache;
     }
 
     getCameraById(cameraId) {
-        return this.cameras.find(c => c.id === cameraId) || null;
+        return this._cameraMap.get(cameraId) ?? null;
     }
 
     getNavigationCameras() {
@@ -972,7 +1055,7 @@ class StoreLayoutViewer {
 
         // Always include selected camera
         if (this.selectedCamera !== null) {
-            const sel = this.cameras.find(c => c.id === this.selectedCamera);
+            const sel = this._cameraMap.get(this.selectedCamera);
             if (sel && !visible.find(c => c.id === sel.id)) {
                 let inserted = false;
                 for (let i = 0; i < visible.length; i++) {
@@ -988,7 +1071,7 @@ class StoreLayoutViewer {
 
         // Always include hovered camera
         if (this.hoveredCamera !== null) {
-            const hov = this.cameras.find(c => c.id === this.hoveredCamera);
+            const hov = this._cameraMap.get(this.hoveredCamera);
             if (hov && !visible.find(c => c.id === hov.id)) {
                 let inserted = false;
                 for (let i = 0; i < visible.length; i++) {
@@ -1064,12 +1147,33 @@ class StoreLayoutViewer {
 
         // Overlay marker positions for animated pulse rendering.
         this.overlayVisibleCameras = camsDrawOrder.filter(c => c.isOverlay);
-        if (this.overlayVisibleCameras.length > 0) {
+        const overlayCount = this.overlayVisibleCameras.length;
+        if (overlayCount > 0) {
             const overlayPositions = new Float32Array(
                 this.overlayVisibleCameras.flatMap(c => c.position)
             );
             gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayCameraBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, overlayPositions, gl.DYNAMIC_DRAW);
+
+            // Rebuild static halo/core color buffers only when the overlay set changes size.
+            // These colors are constant per overlay count — no need to re-upload every frame.
+            if (overlayCount !== this._overlayBufferCount) {
+                this._overlayBufferCount = overlayCount;
+                const haloData = new Float32Array(overlayCount * 4);
+                const coreData = new Float32Array(overlayCount * 4);
+                for (let i = 0; i < overlayCount; i++) {
+                    haloData[i * 4 + 0] = 1.0;  haloData[i * 4 + 1] = 0.44;
+                    haloData[i * 4 + 2] = 0.12; haloData[i * 4 + 3] = 0.35;
+                    coreData[i * 4 + 0] = 0.98;  coreData[i * 4 + 1] = 0.45;
+                    coreData[i * 4 + 2] = 0.18;  coreData[i * 4 + 3] = 1.0;
+                }
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayHaloColorBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, haloData, gl.STATIC_DRAW);
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayCoreColorBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, coreData, gl.STATIC_DRAW);
+            }
+        } else {
+            this._overlayBufferCount = 0;
         }
 
         this.updateDirectionBuffer();
@@ -1302,18 +1406,15 @@ class StoreLayoutViewer {
         if (!this.matchLineVertexCount) return;
 
         const gl = this.gl;
+        const locs = this.locations.line;
         gl.useProgram(this.lineProgram);
 
-        const viewLoc = gl.getUniformLocation(this.lineProgram, 'u_viewMatrix');
-        const colorLoc = gl.getUniformLocation(this.lineProgram, 'u_color');
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform4f(locs.color, 0.0, 0.75, 0.35, 0.7);
 
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
-        gl.uniform4f(colorLoc, 0.0, 0.75, 0.35, 0.7);
-
-        const posLoc = gl.getAttribLocation(this.lineProgram, 'a_position');
         gl.bindBuffer(gl.ARRAY_BUFFER, this.matchLineBuffer);
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
 
         gl.drawArrays(gl.TRIANGLES, 0, this.matchLineVertexCount);
     }
@@ -1323,28 +1424,13 @@ class StoreLayoutViewer {
     // ========================================================================
 
     computeFitViewState() {
-        if (this.cameras.length === 0 && this.pointCloud.length === 0) return null;
-        let minX = Infinity, minY = Infinity;
-        let maxX = -Infinity, maxY = -Infinity;
+        const bounds = this._dataBoundsCache || this._computeAndCacheBounds();
+        if (!bounds) return null;
 
-        for (const cam of this.cameras) {
-            minX = Math.min(minX, cam.position[0]);
-            minY = Math.min(minY, cam.position[1]);
-            maxX = Math.max(maxX, cam.position[0]);
-            maxY = Math.max(maxY, cam.position[1]);
-        }
-
-        for (const pt of this.pointCloud) {
-            minX = Math.min(minX, pt[0]);
-            minY = Math.min(minY, pt[1]);
-            maxX = Math.max(maxX, pt[0]);
-            maxY = Math.max(maxY, pt[1]);
-        }
-
-        const centerX = (minX + maxX) / 2;
-        const centerY = (minY + maxY) / 2;
-        const width = maxX - minX;
-        const height = maxY - minY;
+        const centerX = (bounds.minX + bounds.maxX) / 2;
+        const centerY = (bounds.minY + bounds.maxY) / 2;
+        const width = bounds.maxX - bounds.minX;
+        const height = bounds.maxY - bounds.minY;
 
         const boundedWidth = Math.max(width, 1);
         const boundedHeight = Math.max(height, 1);
@@ -1359,24 +1445,7 @@ class StoreLayoutViewer {
     }
 
     getDataBoundsWorld() {
-        if (this.cameras.length === 0 && this.pointCloud.length === 0) return null;
-        let minX = Infinity, minY = Infinity;
-        let maxX = -Infinity, maxY = -Infinity;
-
-        for (const cam of this.cameras) {
-            minX = Math.min(minX, cam.position[0]);
-            minY = Math.min(minY, cam.position[1]);
-            maxX = Math.max(maxX, cam.position[0]);
-            maxY = Math.max(maxY, cam.position[1]);
-        }
-        for (const pt of this.pointCloud) {
-            minX = Math.min(minX, pt[0]);
-            minY = Math.min(minY, pt[1]);
-            maxX = Math.max(maxX, pt[0]);
-            maxY = Math.max(maxY, pt[1]);
-        }
-
-        return { minX, minY, maxX, maxY };
+        return this._dataBoundsCache || this._computeAndCacheBounds();
     }
 
     clampPanToDataBounds(panX, panY, zoom = this.zoom) {
@@ -1487,29 +1556,22 @@ class StoreLayoutViewer {
     }
 
     areAllDataWithinCanvas(zoom = this.zoom, panX = this.panX, panY = this.panY) {
-        const hasData = this.cameras.length > 0 || this.pointCloud.length > 0;
-        if (!hasData || this.canvas.width <= 0 || this.canvas.height <= 0) return true;
+        const bounds = this._dataBoundsCache;
+        if (!bounds || this.canvas.width <= 0 || this.canvas.height <= 0) return true;
 
+        // Test the four corners of the bounding box — O(1) instead of O(N) over all points.
         const scaleX = zoom * 2 / this.canvas.width;
         const scaleY = -zoom * 2 / this.canvas.height;
         const epsilon = 1e-6;
 
-        const inBounds = (point) => {
-            const ndcX = (point[0] + panX) * scaleX;
-            const ndcY = (point[1] + panY) * scaleY;
-            return (
-                ndcX >= -1 - epsilon &&
-                ndcX <= 1 + epsilon &&
-                ndcY >= -1 - epsilon &&
-                ndcY <= 1 + epsilon
-            );
-        };
-
-        for (const cam of this.cameras) {
-            if (!inBounds(cam.position)) return false;
-        }
-        for (const pt of this.pointCloud) {
-            if (!inBounds(pt)) return false;
+        for (const x of [bounds.minX, bounds.maxX]) {
+            for (const y of [bounds.minY, bounds.maxY]) {
+                const ndcX = (x + panX) * scaleX;
+                const ndcY = (y + panY) * scaleY;
+                if (ndcX < -1 - epsilon || ndcX > 1 + epsilon || ndcY < -1 - epsilon || ndcY > 1 + epsilon) {
+                    return false;
+                }
+            }
         }
         return true;
     }
@@ -1527,7 +1589,8 @@ class StoreLayoutViewer {
         this.updatePathLine();
         this.updateDirectionBuffer();
         this.updateFOVWedge();
-        this.updateMatchLines();
+        // updateMatchLines is only needed when the selected camera changes, not on every view change.
+        // It is called from selectCamera() and deselectCamera() instead.
         this.updateScaleBar();
         // Re-render annotation overlays (bbox + polygons) when view changes
         this.renderAnnotationBoxes();
@@ -1595,7 +1658,7 @@ class StoreLayoutViewer {
         gl.clearColor(0.953, 0.925, 0.851, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        if (this.showPointCloud && this.pointCloud.length > 0) {
+        if (this.showPointCloud && this.pointCount > 0) {
             this.renderPointCloud();
         }
 
@@ -1776,97 +1839,80 @@ class StoreLayoutViewer {
 
     renderPointCloud() {
         const gl = this.gl;
+        const locs = this.locations.point;
         gl.useProgram(this.pointProgram);
 
-        const viewLoc = gl.getUniformLocation(this.pointProgram, 'u_viewMatrix');
-        const sizeLoc = gl.getUniformLocation(this.pointProgram, 'u_pointSize');
-        const colorLoc = gl.getUniformLocation(this.pointProgram, 'u_color');
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform1f(locs.pointSize, this.pointSize * window.devicePixelRatio);
+        gl.uniform4f(locs.color, 0.22, 0.22, 0.22, 0.85);
 
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
-        gl.uniform1f(sizeLoc, this.pointSize * window.devicePixelRatio);
-        gl.uniform4f(colorLoc, 0.22, 0.22, 0.22, 0.85);
-
-        const posLoc = gl.getAttribLocation(this.pointProgram, 'a_position');
         gl.bindBuffer(gl.ARRAY_BUFFER, this.pointBuffer);
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
 
-        gl.drawArrays(gl.POINTS, 0, this.pointCloud.length);
+        gl.drawArrays(gl.POINTS, 0, this.pointCount);
     }
 
     renderPath() {
         const gl = this.gl;
+        const locs = this.locations.line;
         gl.useProgram(this.lineProgram);
 
-        const viewLoc = gl.getUniformLocation(this.lineProgram, 'u_viewMatrix');
-        const colorLoc = gl.getUniformLocation(this.lineProgram, 'u_color');
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform4f(locs.color, 0.40, 0.40, 0.40, 0.72);
 
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
-        gl.uniform4f(colorLoc, 0.40, 0.40, 0.40, 0.72);
-
-        const posLoc = gl.getAttribLocation(this.lineProgram, 'a_position');
         gl.bindBuffer(gl.ARRAY_BUFFER, this.pathBuffer);
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
 
         gl.drawArrays(gl.TRIANGLES, 0, this.pathVertexCount);
     }
 
     renderFOVWedge() {
         const gl = this.gl;
+        const locs = this.locations.line;
         gl.useProgram(this.lineProgram);
 
-        const viewLoc = gl.getUniformLocation(this.lineProgram, 'u_viewMatrix');
-        const colorLoc = gl.getUniformLocation(this.lineProgram, 'u_color');
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform4f(locs.color, 0.0, 0.0, 0.0, 0.52);
 
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
-        gl.uniform4f(colorLoc, 0.0, 0.0, 0.0, 0.52);
-
-        const posLoc = gl.getAttribLocation(this.lineProgram, 'a_position');
         gl.bindBuffer(gl.ARRAY_BUFFER, this.fovBuffer);
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
 
         gl.drawArrays(gl.TRIANGLES, 0, this.fovVertexCount);
     }
 
     renderDirections() {
         const gl = this.gl;
+        const locs = this.locations.line;
         gl.useProgram(this.lineProgram);
 
-        const viewLoc = gl.getUniformLocation(this.lineProgram, 'u_viewMatrix');
-        const colorLoc = gl.getUniformLocation(this.lineProgram, 'u_color');
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform4f(locs.color, 0.8, 0.1, 0.1, 0.95);
 
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
-        gl.uniform4f(colorLoc, 0.8, 0.1, 0.1, 0.95);
-
-        const posLoc = gl.getAttribLocation(this.lineProgram, 'a_position');
         gl.bindBuffer(gl.ARRAY_BUFFER, this.directionBuffer);
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
 
         gl.drawArrays(gl.TRIANGLES, 0, this.directionVertexCount);
     }
 
     renderCameras() {
         const gl = this.gl;
+        const locs = this.locations.camera;
         gl.useProgram(this.cameraProgram);
 
-        const viewLoc = gl.getUniformLocation(this.cameraProgram, 'u_viewMatrix');
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform1f(locs.pointSize, 12 * window.devicePixelRatio);
 
-        const sizeLoc = gl.getUniformLocation(this.cameraProgram, 'u_pointSize');
-        gl.uniform1f(sizeLoc, 12 * window.devicePixelRatio);
-
-        const posLoc = gl.getAttribLocation(this.cameraProgram, 'a_position');
         gl.bindBuffer(gl.ARRAY_BUFFER, this.cameraBuffer);
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
 
-        const colorLoc = gl.getAttribLocation(this.cameraProgram, 'a_color');
         gl.bindBuffer(gl.ARRAY_BUFFER, this.cameraColorBuffer);
-        gl.enableVertexAttribArray(colorLoc);
-        gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.color);
+        gl.vertexAttribPointer(locs.color, 4, gl.FLOAT, false, 0, 0);
 
         gl.drawArrays(gl.POINTS, 0, this.visibleCameras.length);
     }
@@ -1876,40 +1922,31 @@ class StoreLayoutViewer {
         if (overlayCount === 0) return;
 
         const gl = this.gl;
+        const locs = this.locations.camera;
         gl.useProgram(this.cameraProgram);
-        const viewLoc = gl.getUniformLocation(this.cameraProgram, 'u_viewMatrix');
-        const sizeLoc = gl.getUniformLocation(this.cameraProgram, 'u_pointSize');
-        const posLoc = gl.getAttribLocation(this.cameraProgram, 'a_position');
-        const colorLoc = gl.getAttribLocation(this.cameraProgram, 'a_color');
 
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayCameraBuffer);
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
 
-        const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.0025); // Speed of pulse animation.  Higher multiplier = faster pulse.
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.0025);
         const haloSize = (18 + 10 * pulse) * window.devicePixelRatio;
         const coreSize = 10 * window.devicePixelRatio;
 
-        const haloColors = new Float32Array(
-            Array.from({ length: overlayCount }, () => [1.0, 0.44, 0.12, 0.35]).flat()
-        );
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayColorBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, haloColors, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(colorLoc);
-        gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, 0, 0);
-        gl.uniform1f(sizeLoc, haloSize);
+        // Halo — uses pre-allocated static color buffer (no per-frame allocation or upload)
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayHaloColorBuffer);
+        gl.enableVertexAttribArray(locs.color);
+        gl.vertexAttribPointer(locs.color, 4, gl.FLOAT, false, 0, 0);
+        gl.uniform1f(locs.pointSize, haloSize);
         gl.drawArrays(gl.POINTS, 0, overlayCount);
 
-        const coreColors = new Float32Array(
-            Array.from({ length: overlayCount }, () => [0.98, 0.45, 0.18, 1.0]).flat()
-        );
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayColorBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, coreColors, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(colorLoc);
-        gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, 0, 0);
-        gl.uniform1f(sizeLoc, coreSize);
+        // Core
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayCoreColorBuffer);
+        gl.enableVertexAttribArray(locs.color);
+        gl.vertexAttribPointer(locs.color, 4, gl.FLOAT, false, 0, 0);
+        gl.uniform1f(locs.pointSize, coreSize);
         gl.drawArrays(gl.POINTS, 0, overlayCount);
     }
 
@@ -1917,13 +1954,11 @@ class StoreLayoutViewer {
         if (this.selectedCamera === null || !this.selectedIndicatorPose) return;
 
         const gl = this.gl;
+        const locs = this.locations.camera;
         gl.useProgram(this.cameraProgram);
 
-        const viewLoc = gl.getUniformLocation(this.cameraProgram, 'u_viewMatrix');
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
-
-        const sizeLoc = gl.getUniformLocation(this.cameraProgram, 'u_pointSize');
-        gl.uniform1f(sizeLoc, 14.4 * window.devicePixelRatio);
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform1f(locs.pointSize, 14.4 * window.devicePixelRatio);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.selectedCameraBuffer);
         gl.bufferData(
@@ -1931,16 +1966,14 @@ class StoreLayoutViewer {
             new Float32Array([this.selectedIndicatorPose.x, this.selectedIndicatorPose.y]),
             gl.DYNAMIC_DRAW
         );
-        const posLoc = gl.getAttribLocation(this.cameraProgram, 'a_position');
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
 
         const overlayColor = [0.965, 0.831, 0.278, 1.0];
         gl.bindBuffer(gl.ARRAY_BUFFER, this.selectedCameraColorBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(overlayColor), gl.DYNAMIC_DRAW);
-        const colorLoc = gl.getAttribLocation(this.cameraProgram, 'a_color');
-        gl.enableVertexAttribArray(colorLoc);
-        gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.color);
+        gl.vertexAttribPointer(locs.color, 4, gl.FLOAT, false, 0, 0);
 
         gl.drawArrays(gl.POINTS, 0, 1);
     }
@@ -1992,17 +2025,15 @@ class StoreLayoutViewer {
         if (triangles.length === 0) return;
 
         const gl = this.gl;
+        const locs = this.locations.line;
         gl.useProgram(this.lineProgram);
-        const viewLoc = gl.getUniformLocation(this.lineProgram, 'u_viewMatrix');
-        const colorLoc = gl.getUniformLocation(this.lineProgram, 'u_color');
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
-        gl.uniform4f(colorLoc, 0.8, 0.1, 0.1, 0.95);
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform4f(locs.color, 0.8, 0.1, 0.1, 0.95);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.selectedDirectionBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(triangles), gl.DYNAMIC_DRAW);
-        const posLoc = gl.getAttribLocation(this.lineProgram, 'a_position');
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
         gl.drawArrays(gl.TRIANGLES, 0, triangles.length / 2);
     }
 
@@ -2030,15 +2061,13 @@ class StoreLayoutViewer {
         }
 
         gl.useProgram(this.lineProgram);
-        const viewLoc = gl.getUniformLocation(this.lineProgram, 'u_viewMatrix');
-        const colorLoc = gl.getUniformLocation(this.lineProgram, 'u_color');
-        gl.uniformMatrix3fv(viewLoc, false, this.viewMatrix);
-        gl.uniform4f(colorLoc, 0.0, 0.0, 0.0, 0.52);
+        const locs = this.locations.line;
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform4f(locs.color, 0.0, 0.0, 0.0, 0.52);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.selectedFovBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.DYNAMIC_DRAW);
-        const posLoc = gl.getAttribLocation(this.lineProgram, 'a_position');
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
         gl.drawArrays(gl.TRIANGLES, 0, verts.length / 2);
     }
 
@@ -2131,6 +2160,7 @@ class StoreLayoutViewer {
             this.smoothPanToCamera(cam);
         }
 
+        this.updateMatchLines(); // selectedCamera changed → update debug match lines
         this.render();
     }
 
@@ -2180,6 +2210,7 @@ class StoreLayoutViewer {
 
         this.updateVisibleCameras();
         this.updateFOVWedge();
+        this.updateMatchLines(); // selectedCamera changed → update debug match lines
         this.render();
     }
 
@@ -2279,6 +2310,7 @@ class StoreLayoutViewer {
             this.panX = this.panTargetX;
             this.panY = this.panTargetY;
             this.updateViewMatrix();
+            // Sync visible cameras once at the end of the pan (zoom didn't change, set is same)
             this.updateVisibleCameras();
             this.render();
             this.isAnimatingPan = false;
@@ -2289,7 +2321,7 @@ class StoreLayoutViewer {
         this.panX += dx * lerpFactor;
         this.panY += dy * lerpFactor;
         this.updateViewMatrix();
-        this.updateVisibleCameras();
+        // Skip updateVisibleCameras during pan frames: zoom unchanged → visible set unchanged
         this.render();
 
         requestAnimationFrame(() => this.animatePan());
@@ -3425,25 +3457,9 @@ class StoreLayoutViewer {
     }
 
     computeDataCenter() {
-        let minX = Infinity, minY = Infinity;
-        let maxX = -Infinity, maxY = -Infinity;
-
-        for (const cam of this.cameras) {
-            minX = Math.min(minX, cam.position[0]);
-            minY = Math.min(minY, cam.position[1]);
-            maxX = Math.max(maxX, cam.position[0]);
-            maxY = Math.max(maxY, cam.position[1]);
-        }
-
-        for (const pt of this.pointCloud) {
-            minX = Math.min(minX, pt[0]);
-            minY = Math.min(minY, pt[1]);
-            maxX = Math.max(maxX, pt[0]);
-            maxY = Math.max(maxY, pt[1]);
-        }
-
-        if (!isFinite(minX)) return { x: 0, y: 0 };
-        return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+        const bounds = this._dataBoundsCache || this._computeAndCacheBounds();
+        if (!bounds) return { x: 0, y: 0 };
+        return { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 };
     }
 
     async loadLabelsConfig() {
@@ -4194,8 +4210,22 @@ class StoreLayoutViewer {
             }
         }
 
+        // Rebuild GPU buffer and bounds cache after rotation modifies all positions
+        const count = this.pointCloud.length;
+        if (count > 0) {
+            if (this.pointCloudBuffer.length !== count * 2) {
+                this.pointCloudBuffer = new Float32Array(count * 2);
+            }
+            for (let i = 0; i < count; i++) {
+                this.pointCloudBuffer[i * 2]     = this.pointCloud[i][0];
+                this.pointCloudBuffer[i * 2 + 1] = this.pointCloud[i][1];
+            }
+        }
+        this._dataBoundsCache = null; // invalidate — will be recomputed by _computeAndCacheBounds
+
         // Refresh all rendering
         this.uploadPointCloud();
+        this._computeAndCacheBounds();
         this.updateVisibleCameras();
         this.fitView();
         this.render();
@@ -5121,12 +5151,26 @@ class StoreLayoutViewer {
             this.panTargetY = this.panY;
 
             this.updateViewMatrix();
-            this.updateVisibleCameras();
+            // Do not call updateVisibleCameras during drag: zoom is unchanged so visible set is the same.
+            // It will be synced in onMapMouseUp when the drag ends.
             this.render();
             return;
         }
 
-        // Hover detection
+        // Hover detection — throttle to one check per animation frame
+        this._pendingMouseMoveEvent = e;
+        if (!this._rafMouseMoveScheduled) {
+            this._rafMouseMoveScheduled = true;
+            requestAnimationFrame(() => this._processMouseMove());
+        }
+    }
+
+    _processMouseMove() {
+        this._rafMouseMoveScheduled = false;
+        const e = this._pendingMouseMoveEvent;
+        this._pendingMouseMoveEvent = null;
+        if (!e || this.isPanning || this.isDrawingBox || this.isDrawingPolygon) return;
+
         const world = this.screenToWorld(e.clientX, e.clientY);
         const hitCamera = this.hitTestCamera(world.x, world.y);
         if (hitCamera !== this.hoveredCamera) {
@@ -5175,6 +5219,9 @@ class StoreLayoutViewer {
 
         this.isPanning = false;
         this.dragWorldAnchor = null;
+        // Sync visible cameras now that the drag is over (was skipped during drag for performance)
+        this.updateVisibleCameras();
+        this.render();
     }
 
     onMapMouseLeave() {
