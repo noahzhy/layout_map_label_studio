@@ -244,7 +244,7 @@ INSTALLED_APPS = [
     'ml_model_providers',
     'jwt_auth',
     'session_policy',
-    'layout_viewer',
+    'store_layout',
 ]
 
 MIDDLEWARE = [
@@ -439,9 +439,9 @@ GRAPHIQL = True
 
 # Internationalization
 # https://docs.djangoproject.com/en/2.1/topics/i18n/
-LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
-USE_I18N = False
+LANGUAGE_CODE = 'zh-Hans'
+TIME_ZONE = 'Asia/Shanghai'
+USE_I18N = True
 USE_L10N = True
 USE_TZ = True
 

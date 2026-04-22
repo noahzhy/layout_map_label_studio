@@ -114,9 +114,9 @@
 <body>
 <div class="container">
     <div class="breadcrumb">
-        <a href="{% url 'layout_viewer:index' %}">← 项目列表</a>
+        <a href="{% url 'store_layout:index' %}">← 项目列表</a>
         &nbsp;/&nbsp;
-        <a href="{% url 'layout_viewer:project-detail' pk=project.id %}">{{ project.name }}</a>
+        <a href="{% url 'store_layout:project-detail' pk=project.id %}">{{ project.name }}</a>
         &nbsp;/&nbsp; 分配任务
     </div>
     <h1>分配标注任务</h1>
@@ -220,7 +220,7 @@
 
 <script>
 const CSRF_TOKEN = '{{ csrf_token }}';
-const SAVE_URL   = '{% url "layout_viewer:assign-tasks" pk=project.id %}';
+const SAVE_URL   = '{% url "store_layout:assign-tasks" pk=project.id %}';
 
 // ── Mark select as changed ───────────────────────────────────────────────────
 function markChanged(sel) {

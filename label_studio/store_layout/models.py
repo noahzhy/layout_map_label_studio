@@ -3,7 +3,7 @@ from django.db import models
 
 
 class LayoutProject(models.Model):
-    """A named labeling project that groups store layout tasks."""
+    """A named labeling project that groups store Tasks."""
 
     name = models.CharField(max_length=256, help_text='Project name')
     description = models.TextField(blank=True, help_text='Project description / notes for annotators')
@@ -18,10 +18,10 @@ class LayoutProject(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        app_label = 'layout_viewer'
+        app_label = 'store_layout'
         ordering = ['-created_at']
         verbose_name = 'Layout Project'
-        verbose_name_plural = 'Layout Projects'
+        verbose_name_plural = 'Projects'
 
     def __str__(self):
         return self.name
@@ -87,11 +87,11 @@ class LayoutTask(models.Model):
     )
 
     class Meta:
-        app_label = 'layout_viewer'
+        app_label = 'store_layout'
         unique_together = [('store_id', 'assigned_to')]
         ordering = ['-created_at']
         verbose_name = 'Layout Task'
-        verbose_name_plural = 'Layout Tasks'
+        verbose_name_plural = 'Tasks'
 
     def __str__(self):
         user_str = self.assigned_to.email if self.assigned_to_id else 'unassigned'

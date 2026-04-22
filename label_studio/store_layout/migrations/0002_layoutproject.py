@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('layout_viewer', '0001_initial'),
+        ('store_layout', '0001_initial'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
@@ -29,7 +29,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 'verbose_name': 'Layout Project',
-                'verbose_name_plural': 'Layout Projects',
+                'verbose_name_plural': 'Projects',
                 'ordering': ['-created_at'],
             },
         ),
@@ -42,7 +42,7 @@ class Migration(migrations.Migration):
                 null=True,
                 on_delete=django.db.models.deletion.SET_NULL,
                 related_name='tasks',
-                to='layout_viewer.layoutproject',
+                to='store_layout.layoutproject',
             ),
         ),
     ]

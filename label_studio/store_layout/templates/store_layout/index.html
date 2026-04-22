@@ -63,22 +63,22 @@
 </head>
 <body>
     <div class="container">
-        <h1>🗺️ Store Layout Labeling</h1>
+        <h1>🗺️ Store Layout 标注任务</h1>
         <p class="subtitle">
-            {% if is_admin %}管理员视图 — 所有标注项目{% else %}我的标注项目{% endif %}
+            {% if is_admin %}管理员视图 → 所有标注项目{% else %}我的标注项目{% endif %}
         </p>
 
         {% if is_admin %}
         <div class="admin-bar">
-            <span>通过 <a href="/admin/layout_viewer/layoutproject/add/" target="_blank">Django Admin → New Project</a> 创建项目并分配任务</span>
-            <a href="/admin/layout_viewer/" target="_blank">进入后台管理 →</a>
+            <span>通过 <a href="/admin/store_layout/layoutproject/add/" target="_blank">Django Admin → New Project</a> 创建项目并分配任务</span>
+            <a href="/admin/store_layout/" target="_blank">进入后台管理 →</a>
         </div>
         {% endif %}
 
         {% if projects %}
         <div class="project-grid">
             {% for p in projects %}
-            <a href="{% url 'layout_viewer:project-detail' pk=p.obj.id %}" class="project-card">
+            <a href="{% url 'store_layout:project-detail' pk=p.obj.id %}" class="project-card">
                 <h2>{{ p.obj.name }}</h2>
                 <div class="desc">{{ p.obj.description|truncatechars:80 }}</div>
                 <div class="progress-wrap">
@@ -97,7 +97,7 @@
         <div class="empty-state">
             {% if is_admin %}
             <h2>暂无项目</h2>
-            <p>前往 <a href="/admin/layout_viewer/layoutproject/add/" style="color:#8a5a2b">Django Admin</a> 创建第一个项目</p>
+            <p>前往 <a href="/admin/store_layout/layoutproject/add/" style="color:#8a5a2b">Django Admin</a> 创建第一个项目</p>
             {% else %}
             <h2>暂无分配给您的项目</h2>
             <p>请联系管理员为您创建并分配标注项目</p>

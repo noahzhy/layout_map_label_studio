@@ -72,7 +72,7 @@
 <body>
     <div class="container">
         <div class="breadcrumb">
-            <a href="{% url 'layout_viewer:index' %}">← 项目列表</a>
+            <a href="{% url 'store_layout:index' %}">← 项目列表</a>
             &nbsp;/&nbsp; {{ project.name }}
         </div>
         <h1>{{ project.name }}</h1>
@@ -81,10 +81,10 @@
         {% if is_admin %}
         <div class="admin-bar">
             <span>在
-                <a href="/admin/layout_viewer/layouttask/add/" target="_blank">Django Admin → Layout Tasks</a>
+                <a href="/admin/store_layout/layouttask/add/" target="_blank">Django Admin → Tasks</a>
                 为本项目添加商店任务并分配标注员
             </span>
-            <a href="{% url 'layout_viewer:assign-tasks' pk=project.id %}" style="font-weight:700;color:#38a169;">📋 分配任务管理 →</a>
+            <a href="{% url 'store_layout:assign-tasks' pk=project.id %}" style="font-weight:700;color:#38a169;">📋 分配任务管理 →</a>
         </div>
         {% endif %}
 
@@ -113,11 +113,11 @@
                     </div>
                 {% endif %}
                 {% if store.on_disk %}
-                <a class="preview-link" href="{% url 'layout_viewer:viewer' store_id=store.id %}">预览 →</a>
+                <a class="preview-link" href="{% url 'store_layout:viewer' store_id=store.id %}">预览 →</a>
                 {% endif %}
             </div>
             {% else %}
-            <a href="{% url 'layout_viewer:viewer' store_id=store.id %}" class="store-card">
+            <a href="{% url 'store_layout:viewer' store_id=store.id %}" class="store-card">
                 <h2>{{ store.name }}</h2>
                 <div class="store-id">{{ store.id }}</div>
                 <div style="margin-top:8px">
@@ -137,7 +137,7 @@
         <div class="empty-state">
             <h2>{% if is_admin %}本项目暂无商店任务{% else %}暂无分配给您的任务{% endif %}</h2>
             {% if is_admin %}
-            <p><a href="/admin/layout_viewer/layouttask/add/" style="color:#8a5a2b">添加任务 →</a></p>
+            <p><a href="/admin/store_layout/layouttask/add/" style="color:#8a5a2b">添加任务 →</a></p>
             {% else %}
             <p>请联系管理员为您分配任务</p>
             {% endif %}

@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Store Layout Labeling</title>
-    <link rel="stylesheet" href="/static/layout_viewer/viewer.css">
+    <link rel="stylesheet" href="/static/store_layout/viewer.css">
 </head>
 <body>
     <div id="app">
@@ -37,7 +37,7 @@
                     <button id="exportMapPngBtn">Export PNG</button>
                     <button id="saveJsonBtn">Save JSON</button>
                 </div>
-                <a href="{% if project %}{% url 'layout_viewer:project-detail' pk=project.id %}{% else %}{% url 'layout_viewer:index' %}{% endif %}" style="text-decoration:none">
+                <a href="{% if project %}{% url 'store_layout:project-detail' pk=project.id %}{% else %}{% url 'store_layout:index' %}{% endif %}" style="text-decoration:none">
                     <button type="button">{% if project %}← {{ project.name }}{% else %}← Projects{% endif %}</button>
                 </a>
                 {% if task %}
@@ -173,8 +173,8 @@
     <script>
         // Configuration injected by Django template
         window.LAYOUT_DATA_BASE_URL = '{{ data_base_url }}';
-        window.LAYOUT_SAVE_BASE_URL = '/layout-viewer/{{ store_id }}';
-        window.LAYOUT_LABELS_YAML_URL = '/static/layout_viewer/labels.yaml';
+        window.LAYOUT_SAVE_BASE_URL = '/store_layout/{{ store_id }}';
+        window.LAYOUT_LABELS_YAML_URL = '/static/store_layout/labels.yaml';
 
         {% if task %}
         // Mark-done handler
@@ -187,7 +187,7 @@
                 if (!confirm('确认完成标注并提交？')) return;
                 btn.disabled = true;
                 btn.textContent = '提交中...';
-                fetch('/layout-viewer/{{ store_id }}/mark-done', {
+                fetch('/store_layout/{{ store_id }}/mark-done', {
                     method: 'POST',
                     headers: { 'X-CSRFToken': getCookie('csrftoken') },
                 })
@@ -218,6 +218,6 @@
         });
         {% endif %}
     </script>
-    <script src="/static/layout_viewer/viewer.js"></script>
+    <script src="/static/store_layout/viewer.js"></script>
 </body>
 </html>

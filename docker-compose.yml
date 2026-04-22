@@ -21,8 +21,8 @@ services:
     volumes:
       - ./mydata:/label-studio/data:rw
       - ./deploy/nginx/certs:/certs:ro
-      # Layout viewer: mount static + data for nginx to serve
-      - ./label_studio/layout_viewer/static/layout_viewer:/label-studio/label_studio/core/static_build/layout_viewer:ro
+      # Store Layout: mount static + data for nginx to serve
+      - ./label_studio/store_layout/static/store_layout:/label-studio/label_studio/core/static_build/store_layout:ro
       # Mount updated nginx config with layout-data location block
       - ./deploy/default.conf:/etc/nginx/nginx.conf:ro
     #   Optional: Override nginx default conf
@@ -53,8 +53,8 @@ services:
     #      - LOG_LEVEL=DEBUG
     volumes:
       - ./mydata:/label-studio/data:rw
-      # Layout viewer app (mount source to avoid full rebuild)
-      - ./label_studio/layout_viewer:/label-studio/label_studio/layout_viewer:ro
+      # Store Layout app (mount source to avoid full rebuild)
+      - ./label_studio/store_layout:/label-studio/label_studio/store_layout:ro
       - ./label_studio/core/urls.py:/label-studio/label_studio/core/urls.py:ro
       - ./label_studio/core/settings/base.py:/label-studio/label_studio/core/settings/base.py:ro
       # Clobotics-branded login page

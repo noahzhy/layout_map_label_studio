@@ -51,7 +51,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 'verbose_name': 'Layout Task',
-                'verbose_name_plural': 'Layout Tasks',
+                'verbose_name_plural': 'Tasks',
                 'ordering': ['-created_at'],
             },
         ),

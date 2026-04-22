@@ -71,7 +71,7 @@ def index(request):
             'progress': int(done / total * 100) if total else 0,
         })
 
-    return render(request, 'layout_viewer/index.html', {
+    return render(request, 'store_layout/index.html', {
         'projects': project_list,
         'is_admin': _is_admin(request.user),
     })
@@ -107,7 +107,7 @@ def project_detail(request, pk):
                 'unassigned': len(tasks) == 0,
                 'on_disk': store_id in on_disk,
             })
-        return render(request, 'layout_viewer/store_list.html', {
+        return render(request, 'store_layout/store_list.html', {
             'project': project,
             'stores': stores,
             'is_admin': True,
@@ -124,7 +124,7 @@ def project_detail(request, pk):
                     'name': task.store_id.replace('_', ' ').replace('-', ' ').title(),
                     'task': task,
                 })
-        return render(request, 'layout_viewer/store_list.html', {
+        return render(request, 'store_layout/store_list.html', {
             'project': project,
             'stores': stores,
             'is_admin': False,
@@ -135,7 +135,7 @@ def project_detail(request, pk):
 
 @login_required
 def viewer_page(request, store_id):
-    """Render the layout viewer SPA. Checks access rights and advances task state."""
+    """Render the Store Layout SPA. Checks access rights and advances task state."""
     if not re.match(r'^[\w\-]+$', store_id):
         return HttpResponse('Invalid store ID', status=400)
 
@@ -152,7 +152,7 @@ def viewer_page(request, store_id):
         task.status = LayoutTask.Status.IN_PROGRESS
         task.save(update_fields=['status', 'updated_at'])
 
-    return render(request, 'layout_viewer/viewer.html', {
+    return render(request, 'store_layout/viewer.html', {
         'store_id': store_id,
         'data_base_url': f'/layout-data/{store_id}/',
         'task': task,
@@ -354,7 +354,7 @@ def assign_tasks(request, pk):
     for a in annotators:
         a['display'] = a['email'] or a['username']
 
-    return render(request, 'layout_viewer/assign.html', {
+    return render(request, 'store_layout/assign.html', {
         'project': project,
         'stores': stores,
         'annotators': annotators,
