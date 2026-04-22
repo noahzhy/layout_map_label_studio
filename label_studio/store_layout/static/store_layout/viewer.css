@@ -1267,6 +1267,8 @@ input[type="checkbox"]:focus-visible {
     pointer-events: auto;
     cursor: grab;
     z-index: 5;
+    transform-box: fill-box;
+    transform-origin: center center;
     transition: border-color 0.15s, background 0.15s;
 }
 
@@ -1387,6 +1389,38 @@ input[type="checkbox"]:focus-visible {
 .annotation-resize--ne { top: -4px; right: -4px; cursor: ne-resize; }
 .annotation-resize--se { bottom: -4px; right: -4px; cursor: se-resize; }
 .annotation-resize--sw { bottom: -4px; left: -4px; cursor: sw-resize; }
+
+/* Rotation handle (shown on selected box) */
+.annotation-rotate-line {
+    position: absolute;
+    top: -28px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 1px;
+    height: 24px;
+    background: #f0a030;
+    pointer-events: none;
+    z-index: 6;
+}
+
+.annotation-rotate-handle {
+    position: absolute;
+    top: -46px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border: 1.5px solid #f0a030;
+    border-radius: 50%;
+    cursor: crosshair;
+    z-index: 7;
+    pointer-events: auto;
+}
+
+.annotation-rotate-handle:hover {
+    background: #f0a030;
+}
 
 /* Label picker popup */
 .label-picker {

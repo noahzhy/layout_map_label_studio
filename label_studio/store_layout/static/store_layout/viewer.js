@@ -558,6 +558,7 @@ class StoreLayoutViewer {
                     ann.level = this.getLevelForGroup(ann.attribute);
                 }
                 if (!ann.attributes) ann.attributes = {};
+                if (ann.type === 'bbox' && ann.angle == null) ann.angle = 0;
                 return ann;
             });
             this.nextAnnotationId = this.annotations.reduce((max, a) => Math.max(max, (a.id || 0) + 1), 1);
@@ -2127,9 +2128,9 @@ class StoreLayoutViewer {
             // Update header
             document.getElementById('cameraName').textContent = this.getCameraLabel(cam);
 
-            // Show/hide delete companion button (only in annotation mode)
+            // Show/hide delete companion button for any companion photo
             const delBtn = document.getElementById('deleteCompanionBtn');
-            if (delBtn) delBtn.style.display = (cam.isManualCompanion && this.annotationMode) ? '' : 'none';
+            if (delBtn) delBtn.style.display = (cam.overlayKind === 'companionPhoto') ? '' : 'none';
 
             // Load image (with caching -- no flicker)
             this.loadImage(cam.imageName);
@@ -3427,6 +3428,7 @@ class StoreLayoutViewer {
         this.cameras.push(companion);
         this.manualCompanions.push(companion);
         this.cameraTimestamps.push(companion.timestampMs);
+        this._cameraMap.set(companion.id, companion);
 
         this.hasOverlayCameras = true;
         this.updateOverlayPulseAnimationState();
@@ -3442,10 +3444,12 @@ class StoreLayoutViewer {
         const idx = this.cameras.findIndex(c => c.id === id);
         if (idx < 0) return;
         const cam = this.cameras[idx];
-        if (!cam.isManualCompanion) return;
+        if (cam.overlayKind !== 'companionPhoto') return;
+        if (!confirm('Delete this companion photo?')) return;
 
         this.cameras.splice(idx, 1);
         this.cameraTimestamps.splice(idx, 1);
+        this._cameraMap.delete(id);
         this.manualCompanions = this.manualCompanions.filter(c => c.id !== id);
 
         if (this.selectedCamera === id) this.deselectCamera();
@@ -4104,6 +4108,7 @@ class StoreLayoutViewer {
                 id: this.nextAnnotationId++,
                 type: 'bbox',
                 x, y, width, height,
+                angle: 0,
                 label: label || '',
                 attribute: attribute || '',
                 level,
@@ -4194,6 +4199,8 @@ class StoreLayoutViewer {
                 const [ncx, ncy] = rotate(bcx, bcy);
                 box.x = ncx - box.width / 2;
                 box.y = ncy - box.height / 2;
+                // Sync per-bbox visual angle with the global layout rotation
+                box.angle = (((box.angle || 0) + angleDeg) % 360 + 360) % 360;
             }
         }
 
@@ -4325,6 +4332,9 @@ class StoreLayoutViewer {
         el.style.top = `${top}px`;
         el.style.width = `${w}px`;
         el.style.height = `${h}px`;
+        if (box.angle) {
+            el.style.transform = `rotate(${box.angle}deg)`;
+        }
 
         // Attribute-based color class
         if (box.attribute) {
@@ -4390,6 +4400,51 @@ class StoreLayoutViewer {
                 });
                 el.appendChild(handle);
             }
+
+            // Rotation handle: line stem + circular drag knob
+            const rotateLine = document.createElement('div');
+            rotateLine.className = 'annotation-rotate-line';
+            el.appendChild(rotateLine);
+
+            const rotateHandle = document.createElement('div');
+            rotateHandle.className = 'annotation-rotate-handle';
+            rotateHandle.title = 'Drag to rotate';
+            rotateHandle.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                e.preventDefault();
+
+                const ann = this.annotations.find(a => a.id === box.id);
+                if (!ann) return;
+
+                // Screen center of the box element (stable across rotation)
+                const rect = el.getBoundingClientRect();
+                const screenCx = rect.left + rect.width / 2;
+                const screenCy = rect.top + rect.height / 2;
+
+                const startAngle = ann.angle || 0;
+                const startMouseAngle = Math.atan2(e.clientY - screenCy, e.clientX - screenCx) * 180 / Math.PI;
+                let rotated = false;
+
+                const onMouseMove = (me) => {
+                    const curAngle = Math.atan2(me.clientY - screenCy, me.clientX - screenCx) * 180 / Math.PI;
+                    const delta = curAngle - startMouseAngle;
+                    ann.angle = ((startAngle + delta) % 360 + 360) % 360;
+                    rotated = true;
+                    this.renderAnnotationBoxes();
+                };
+                const onMouseUp = () => {
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                    if (rotated) {
+                        this.hasUnsavedChanges = true;
+                        this.pushHistory();
+                    }
+                };
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+            el.appendChild(rotateHandle);
         }
 
         // Drag to move and click to select/deselect
@@ -4448,26 +4503,55 @@ class StoreLayoutViewer {
     startAnnotationResize(id, handlePos, e) {
         const ann = this.annotations.find(a => a.id === id);
         if (!ann) return;
-        const startWorld = this.screenToWorld(e.clientX, e.clientY);
-        const origX = ann.x, origY = ann.y, origW = ann.width, origH = ann.height;
+
+        const angleRad = (ann.angle || 0) * Math.PI / 180;
+        const cos = Math.cos(angleRad);
+        const sin = Math.sin(angleRad);
+
+        // Current box center and half-extents
+        const cx = ann.x + ann.width / 2;
+        const cy = ann.y + ann.height / 2;
+        const halfW = ann.width / 2;
+        const halfH = ann.height / 2;
+
+        // The "fixed" corner is opposite to the handle being dragged.
+        // In local frame (box-axis-aligned): 'e' handle → fix west side at -halfW; 's' → fix north at -halfH
+        const fixedU = handlePos.includes('e') ? -halfW : halfW;
+        const fixedV = handlePos.includes('s') ? -halfH : halfH;
+
+        // Transform fixed corner local → world  (CSS rotate convention: clockwise positive)
+        const fixedWX = cx + fixedU * cos - fixedV * sin;
+        const fixedWY = cy + fixedU * sin + fixedV * cos;
+
         let resized = false;
+        const MIN_SIZE = 0.01;
 
         const onMouseMove = (me) => {
             const cur = this.screenToWorld(me.clientX, me.clientY);
-            const dx = cur.x - startWorld.x;
-            const dy = cur.y - startWorld.y;
-            let nx = origX, ny = origY, nw = origW, nh = origH;
+            const dx = cur.x - fixedWX;
+            const dy = cur.y - fixedWY;
 
-            if (handlePos.includes('w')) { nx = origX + dx; nw = origW - dx; }
-            if (handlePos.includes('e')) { nw = origW + dx; }
-            if (handlePos.includes('n')) { ny = origY + dy; nh = origH - dy; }
-            if (handlePos.includes('s')) { nh = origH + dy; }
+            // Project world delta onto local axes to get new extents
+            let dotU = dx * cos + dy * sin;    // extent along local x-axis
+            let dotV = -dx * sin + dy * cos;   // extent along local y-axis
 
-            // Prevent negative size — flip origin if dragged past opposite edge
-            if (nw < 0) { nx = nx + nw; nw = -nw; }
-            if (nh < 0) { ny = ny + nh; nh = -nh; }
+            // Clamp to prevent degenerate (zero-size) boxes
+            if (Math.abs(dotU) < MIN_SIZE) dotU = (dotU >= 0 ? 1 : -1) * MIN_SIZE;
+            if (Math.abs(dotV) < MIN_SIZE) dotV = (dotV >= 0 ? 1 : -1) * MIN_SIZE;
 
-            ann.x = nx; ann.y = ny; ann.width = nw; ann.height = nh;
+            const newW = Math.abs(dotU);
+            const newH = Math.abs(dotV);
+
+            // New center = fixed corner + half-diagonal in world space
+            const halfDotU = dotU / 2;
+            const halfDotV = dotV / 2;
+            const newCx = fixedWX + halfDotU * cos - halfDotV * sin;
+            const newCy = fixedWY + halfDotU * sin + halfDotV * cos;
+
+            ann.x = newCx - newW / 2;
+            ann.y = newCy - newH / 2;
+            ann.width = newW;
+            ann.height = newH;
             resized = true;
             this.renderAnnotationBoxes();
         };
@@ -5618,9 +5702,9 @@ class StoreLayoutViewer {
 
             case 'Delete':
             case 'Backspace':
-                if (!this.readOnly && this.annotationMode && this.selectedCamera !== null) {
+                if (!this.readOnly && this.selectedCamera !== null) {
                     const selCam = this.cameras.find(c => c.id === this.selectedCamera);
-                    if (selCam && selCam.isManualCompanion) {
+                    if (selCam && selCam.overlayKind === 'companionPhoto') {
                         e.preventDefault();
                         this.removeCompanionCamera(this.selectedCamera);
                     }
