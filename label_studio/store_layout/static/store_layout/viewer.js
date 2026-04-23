@@ -4350,7 +4350,12 @@ class StoreLayoutViewer {
 
         const labelEl = document.createElement('div');
         labelEl.className = 'annotation-label';
-        const labelText = box.label || (box.id !== undefined ? `#${box.id}` : '');
+        // For aisle annotations, show the notes number directly on the bbox
+        let labelText = box.label || (box.id !== undefined ? `#${box.id}` : '');
+        if (box.attribute === 'aisle' && box.attributes) {
+            const notes = box.attributes.notes;
+            if (notes != null && notes !== '') labelText = `Aisle ${notes}`;
+        }
         const labelLayout = this.getAnnotationLabelLayout(labelText, w, h);
         labelEl.classList.add(`annotation-label--${labelLayout.orientation}`);
         if (labelLayout.orientation === 'vertical') {
@@ -6016,17 +6021,18 @@ class StoreLayoutViewer {
 
         // Dashed outline for boundary
         const isBoundary = ann.attribute === 'boundary' || ann.label === 'Boundary';
-        const dashArray = isBoundary ? '8,5' : 'none';
-        const boundaryStrokeColor = isBoundary ? '#e74c3c' : strokeColor;
-        const boundaryFill = isBoundary ? 'rgba(231,76,60,0.05)' : fillColor;
+        const dashArray = 'none';
+        const boundaryStrokeColor = isBoundary ? '#000000' : strokeColor;
+        const boundaryFill = isBoundary ? 'none' : fillColor;
 
         const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
         polygon.setAttribute('points', points);
         polygon.setAttribute('fill', boundaryFill);
         polygon.setAttribute('stroke', isSelected ? '#f0a030' : boundaryStrokeColor);
-        polygon.setAttribute('stroke-width', isSelected ? '2.5' : (isBoundary ? '2.5' : strokeWidth));
-        if (isBoundary || isSelected) polygon.setAttribute('stroke-dasharray', isSelected ? '5,3' : (isBoundary ? '8,5' : 'none'));
-        polygon.style.pointerEvents = this.annotationMode ? 'all' : 'none';
+        polygon.setAttribute('stroke-width', isSelected ? '2.5' : (isBoundary ? '2' : strokeWidth));
+        if (isSelected) polygon.setAttribute('stroke-dasharray', '5,3');
+        // Boundary interior is click-through; only the stroke is interactive
+        polygon.style.pointerEvents = this.annotationMode ? (isBoundary ? 'stroke' : 'all') : 'none';
         polygon.style.cursor = this.annotationMode ? 'move' : 'default';
 
         if (this.annotationMode) {
@@ -6263,11 +6269,15 @@ class StoreLayoutViewer {
             content.appendChild(this.buildAttrSelect('side', 'Side', ['Both', 'Left', 'Right'], attrs, ann));
         }
 
-        // Notes field for all
-        content.appendChild(this.buildAttrInput('notes', 'Notes', 'text', attrs, ann));
+        // Notes field: number-only for aisle (displays on bbox), free text for others
+        if (ann.attribute === 'aisle') {
+            content.appendChild(this.buildAttrInput('notes', 'Aisle ', 'number', attrs, ann, () => this.renderAnnotationBoxes()));
+        } else {
+            content.appendChild(this.buildAttrInput('notes', 'Notes', 'text', attrs, ann));
+        }
     }
 
-    buildAttrInput(key, labelText, inputType, attrs, ann) {
+    buildAttrInput(key, labelText, inputType, attrs, ann, onAfterChange) {
         const field = document.createElement('div');
         field.className = 'attr-field';
         const lbl = document.createElement('label');
@@ -6280,6 +6290,7 @@ class StoreLayoutViewer {
             this.pushHistory();
             attrs[key] = inputType === 'number' ? (parseFloat(inp.value) || 0) : inp.value;
             this.hasUnsavedChanges = true;
+            if (onAfterChange) onAfterChange();
         });
         field.appendChild(lbl);
         field.appendChild(inp);
