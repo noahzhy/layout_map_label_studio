@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 ARG NODE_VERSION=22
 ARG PYTHON_VERSION=3.13
 ARG POETRY_VERSION=2.3.2
@@ -16,7 +15,7 @@ ARG BRANCH_OVERRIDE
 # 5. "prod" - Creates the final production image with the Label Studio, Nginx, and other dependencies.
 
 ################################ Stage: frontend-builder (build frontend assets)
-FROM --platform=${BUILDPLATFORM} node:${NODE_VERSION}-alpine AS frontend-builder
+FROM --platform=${BUILDPLATFORM} ccr.ccs.tencentyun.com/clobotics/node:${NODE_VERSION}-alpine AS frontend-builder
 ENV BUILD_NO_SERVER=true \
     BUILD_NO_HASH=true \
     BUILD_NO_CHUNKS=true \
@@ -28,7 +27,8 @@ ENV BUILD_NO_SERVER=true \
 
 WORKDIR /label-studio/web
 
-RUN apk add --no-cache \
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.tencent.com/g' /etc/apk/repositories && \
+    apk add --no-cache \
     build-base \
     pkgconfig \
     cairo-dev \
@@ -60,7 +60,7 @@ RUN --mount=type=cache,target=/root/web/.yarn,id=yarn-cache,sharing=locked \
     yarn version:libs
 
 ################################ Stage: venv-builder (prepare the virtualenv)
-FROM python:${PYTHON_VERSION}-alpine AS venv-builder
+FROM ccr.ccs.tencentyun.com/clobotics/python:${PYTHON_VERSION}-slim AS venv-builder
 ARG POETRY_VERSION
 ARG PYTHON_VERSION
 
@@ -69,6 +69,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=off \
     PIP_DISABLE_PIP_VERSION_CHECK=on \
     PIP_DEFAULT_TIMEOUT=100 \
+    PIP_PREFER_BINARY=1 \
     PIP_CACHE_DIR="/.cache" \
     POETRY_CACHE_DIR="/.poetry-cache" \
     POETRY_HOME="/opt/poetry" \
@@ -76,12 +77,14 @@ ENV PYTHONUNBUFFERED=1 \
     POETRY_VIRTUALENVS_PREFER_ACTIVE_PYTHON=true \
     PATH="/opt/poetry/bin:$PATH"
 
-RUN apk add --no-cache \
-    build-base \
+RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     git \
-    linux-headers \
     python3-dev \
-    pcre2-dev
+    libpcre2-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 ADD https://install.python-poetry.org /tmp/install-poetry.py
 RUN python /tmp/install-poetry.py
@@ -96,11 +99,16 @@ ENV PATH="$VENV_PATH/bin:$PATH"
 # Copy dependency files
 COPY pyproject.toml poetry.lock README.md ./
 
+# Override default PyPI URL with Aliyun mirror via Poetry global config
+RUN mkdir -p /root/.config/pypoetry && \
+    printf '[repositories.pypi]\nurl = "https://mirrors.aliyun.com/pypi/simple/"\n' \
+    > /root/.config/pypoetry/config.toml
+
 # Set a default build argument for including dev dependencies
 ARG INCLUDE_DEV=false
 
 # Install dependencies
-RUN --mount=type=cache,target=/.poetry-cache,id=poetry-cache-alpine,sharing=locked \
+RUN --mount=type=cache,target=/.poetry-cache,id=poetry-cache-slim,sharing=locked \
     poetry check --lock && \
     if [ "$INCLUDE_DEV" = "true" ]; then \
         poetry install --no-root --extras uwsgi --with test; \
@@ -110,7 +118,7 @@ RUN --mount=type=cache,target=/.poetry-cache,id=poetry-cache-alpine,sharing=lock
 
 # Install LS
 COPY label_studio label_studio
-RUN --mount=type=cache,target=/.poetry-cache,id=poetry-cache-alpine,sharing=locked \
+RUN --mount=type=cache,target=/.poetry-cache,id=poetry-cache-slim,sharing=locked \
     # `--extras uwsgi` is mandatory here due to poetry bug: https://github.com/python-poetry/poetry/issues/7302
     poetry install --only-root --extras uwsgi && \
     python3 label_studio/manage.py collectstatic --no-input
@@ -125,7 +133,7 @@ RUN --mount=type=bind,source=.git,target=./.git \
     VERSION_OVERRIDE=${VERSION_OVERRIDE} BRANCH_OVERRIDE=${BRANCH_OVERRIDE} poetry run python label_studio/core/version.py
 
 ################################### Stage: prod
-FROM python:${PYTHON_VERSION}-alpine AS production
+FROM ccr.ccs.tencentyun.com/clobotics/python:${PYTHON_VERSION}-slim AS production
 
 ENV LS_DIR=/label-studio \
     HOME=/label-studio \
@@ -139,14 +147,17 @@ ENV LS_DIR=/label-studio \
 WORKDIR $LS_DIR
 
 # install prerequisites for app
-RUN apk add --no-cache \
-    expat \
-    mesa-gl \
-    glib \
+RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    libexpat1 \
+    libgl1 \
+    libglib2.0-0 \
     curl \
     nginx \
     bash \
-    procps
+    procps \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
     mkdir -p $LS_DIR $LABEL_STUDIO_BASE_DATA_DIR $OPT_DIR && \

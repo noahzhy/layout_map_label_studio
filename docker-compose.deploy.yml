@@ -1,0 +1,77 @@
+# Production deployment compose — 代码烘焙进镜像，只挂载数据目录
+#
+# ─── 数据挂载说明 ──────────────────────────────────────────────────────────
+#
+#  宿主机路径                        容器内路径
+#  ./data/                          /label-studio/data/
+#  ├── layout/                          layout/
+#  │   └── <store_id>/                  └── <store_id>/
+#  │       ├── viewer_label.json.gz         ├── viewer_label.json.gz  ← 必须
+#  │       ├── detections.json.gz           ├── detections.json.gz    ← 可选（人脸模糊）
+#  │       ├── images/                      ├── images/               ← 相机图片
+#  │       └── thumbnails/                  └── thumbnails/           ← 缩略图
+#  ├── media/                           media/    ← Label Studio 上传文件（自动创建）
+#  └── export/                          export/   ← Label Studio 导出（自动创建）
+#
+#  ./postgres-data/                 /var/lib/postgresql/data/
+#
+# ─── 启动步骤 ───────────────────────────────────────────────────────────────
+#   1. 复制 .env.deploy 为 .env 并按需修改
+#   2. mkdir -p ./data/layout
+#   3. 把门店文件夹复制到 ./data/layout/<store_id>/
+#   4. docker compose -f docker-compose.deploy.yml up -d
+# ────────────────────────────────────────────────────────────────────────────
+
+x-image: &image ${IMAGE:-ccr.ccs.tencentyun.com/clobotics/labelstudio-storelayout:latest-amd64}
+
+services:
+  nginx:
+    image: *image
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:8085"
+    depends_on:
+      - app
+    environment:
+      - LABEL_STUDIO_HOST=${LABEL_STUDIO_HOST:-}
+      - LABEL_STUDIO_LANGUAGE=zh-CN
+    volumes:
+      # 只挂载数据，代码已烘焙进镜像
+      - ./data:/label-studio/data:rw
+      - ./deploy/nginx/certs:/certs:ro
+      - ./deploy/default.conf:/etc/nginx/nginx.conf:ro
+    command: nginx
+
+  app:
+    image: *image
+    restart: unless-stopped
+    expose:
+      - "8000"
+    depends_on:
+      - db
+    environment:
+      - DJANGO_DB=default
+      - POSTGRE_NAME=postgres
+      - POSTGRE_USER=postgres
+      - POSTGRE_PASSWORD=${POSTGRES_PASSWORD:-}
+      - POSTGRE_PORT=5432
+      - POSTGRE_HOST=db
+      - LABEL_STUDIO_HOST=${LABEL_STUDIO_HOST:-}
+      - LABEL_STUDIO_SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - JSON_LOG=1
+      - LABEL_STUDIO_ENABLE_SIGNUP=true
+      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=false
+    volumes:
+      # 只挂载数据，代码已烘焙进镜像
+      - ./data:/label-studio/data:rw
+    command: label-studio-uwsgi
+
+  db:
+    image: cr.ccs.tencentyun.com/clobotics/pgautoupgrade:17-alpine-amd64
+    hostname: db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_HOST_AUTH_METHOD=trust
+      - POSTGRES_USER=postgres
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
