@@ -327,6 +327,15 @@ class StoreLayoutViewer {
         this.overlayHaloColorBuffer = null;
         this.overlayCoreColorBuffer = null;
 
+        // Point-cloud PNG cache layer
+        this.pcCanvas = document.getElementById('pcCanvas');
+        this.pcCtx = this.pcCanvas ? this.pcCanvas.getContext('2d') : null;
+        this.pcCacheValid = false;
+        this.pcRefZoom = 1;
+        this.pcRefPanX = 0;
+        this.pcRefPanY = 0;
+        this._pcCaptureDebounceTimer = null;
+
         // Selected camera indicator animation (dot/direction/FOV)
         this.selectedIndicatorPose = null;
         this.selectedIndicatorTargetPose = null;
@@ -380,6 +389,8 @@ class StoreLayoutViewer {
         this.overlayHaloColorBuffer = gl.createBuffer();
         this.overlayCoreColorBuffer = gl.createBuffer();
         this.matchLineBuffer = gl.createBuffer();
+        // Pre-allocated buffer for calibration overlay (avoids create/delete on every render call)
+        this.calibrationBuffer = gl.createBuffer();
 
         // Cache all shader uniform/attribute locations once — avoids 14+ GL state queries per frame.
         this.locations = {
@@ -674,7 +685,11 @@ class StoreLayoutViewer {
         this.hasOverlayCameras = this.cameras.some(c => c.isOverlay);
         this.updateOverlayPulseAnimationState();
         this.fitView();
+        // Invalidate any stale cache before first render, then capture fresh
+        this.pcCacheValid = false;
         this.render();
+        this.capturePointCloudCache();
+        this.render(); // re-render cameras/overlays on top of newly cached pcCanvas
         this.renderMapLegend();
         this.restoreCalibration(data);
     }
@@ -697,7 +712,9 @@ class StoreLayoutViewer {
 
     animateOverlayPulse() {
         if (!this.isOverlayPulseAnimating) return;
-        this.render();
+        // skipDom=true: annotation DOM elements don't change during the idle pulse loop,
+        // so skip the expensive renderMapAnnotations() and renderAnnotationBoxes() rebuilds.
+        this.render(true);
         this.overlayPulseRaf = requestAnimationFrame(() => this.animateOverlayPulse());
     }
 
@@ -1593,8 +1610,11 @@ class StoreLayoutViewer {
         // updateMatchLines is only needed when the selected camera changes, not on every view change.
         // It is called from selectCamera() and deselectCamera() instead.
         this.updateScaleBar();
-        // Re-render annotation overlays (bbox + polygons) when view changes
-        this.renderAnnotationBoxes();
+        // Apply CSS transform to pcCanvas so it tracks pan/zoom without a WebGL redraw
+        this.updatePointCloudTransform();
+        // Note: renderAnnotationBoxes() is intentionally NOT called here.
+        // All callers of updateViewMatrix() follow up with render(), which calls it.
+        // Calling it here too would rebuild annotation DOM twice per frame.
     }
 
     screenToWorld(screenX, screenY) {
@@ -1650,16 +1670,86 @@ class StoreLayoutViewer {
         this.canvas.style.width = rect.width + 'px';
         this.canvas.style.height = rect.height + 'px';
         this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+        // Sync pcCanvas physical size to match glCanvas
+        if (this.pcCanvas) {
+            this.pcCanvas.width = this.canvas.width;
+            this.pcCanvas.height = this.canvas.height;
+            this.pcCanvas.style.width = this.canvas.style.width;
+            this.pcCanvas.style.height = this.canvas.style.height;
+        }
+        // Canvas size changed — cached image no longer maps correctly
+        this.pcCacheValid = false;
         this.updateViewMatrix();
     }
 
-    render() {
+    // -----------------------------------------------------------------------
+    // Point-cloud PNG cache helpers
+    // -----------------------------------------------------------------------
+
+    /**
+     * Render ONLY the point cloud into the offscreen WebGL canvas, copy the
+     * result as a static bitmap into pcCanvas, then record the reference
+     * view state.  After this call pcCacheValid = true and render() will
+     * skip WebGL point-cloud draw calls.
+     */
+    capturePointCloudCache() {
+        if (!this.pcCanvas || !this.pcCtx || !this.showPointCloud || this.pointCount === 0) {
+            this.pcCacheValid = false;
+            if (this.pcCanvas) this.pcCanvas.style.opacity = '0';
+            return;
+        }
+        const gl = this.gl;
+        // Render point cloud on a transparent background
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        this.renderPointCloud();
+
+        // Blit WebGL canvas → 2D pcCanvas
+        this.pcCtx.clearRect(0, 0, this.pcCanvas.width, this.pcCanvas.height);
+        this.pcCtx.drawImage(this.canvas, 0, 0);
+
+        // Store reference view state
+        this.pcRefZoom = this.zoom;
+        this.pcRefPanX = this.panX;
+        this.pcRefPanY = this.panY;
+        this.pcCacheValid = true;
+
+        // Reset pcCanvas transform (it is now pixel-perfect)
+        this.pcCanvas.style.transform = '';
+        this.pcCanvas.style.opacity = '1';
+    }
+
+    /**
+     * Apply a CSS transform to pcCanvas so it visually tracks the current
+     * view without a WebGL redraw.
+     */
+    updatePointCloudTransform() {
+        if (!this.pcCanvas || !this.pcCacheValid) {
+            if (this.pcCanvas) this.pcCanvas.style.opacity = '0';
+            return;
+        }
+        const dpr = window.devicePixelRatio || 1;
+        const s = this.zoom / this.pcRefZoom;
+        // pan delta in CSS pixels (physical / dpr)
+        // Both X and Y follow the same direction as worldToScreen:
+        //   screenY = (wy + panY) * zoom + H/2  => positive panY shifts content down
+        const dtx = (this.panX - this.pcRefPanX) * this.zoom / dpr;
+        const dty = (this.panY - this.pcRefPanY) * this.zoom / dpr;
+        this.pcCanvas.style.transform = `translate(${dtx}px, ${dty}px) scale(${s})`;
+        this.pcCanvas.style.opacity = '1';
+    }
+
+    // -----------------------------------------------------------------------
+
+    render(skipDom = false) {
         const gl = this.gl;
 
-        gl.clearColor(0.953, 0.925, 0.851, 1.0);
+        // Background is provided by #mapPanel CSS; canvas is transparent
+        gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        if (this.showPointCloud && this.pointCount > 0) {
+        if (this.showPointCloud && this.pointCount > 0 && !this.pcCacheValid) {
+            // Cache not ready yet — draw directly (first frame / after invalidation)
             this.renderPointCloud();
         }
 
@@ -1691,8 +1781,13 @@ class StoreLayoutViewer {
             this.renderSelectedDirectionOverlay();
         }
 
-        this.renderMapAnnotations();
-        this.renderAnnotationBoxes();
+        // DOM overlay rebuilds are expensive; skip during animation loops where
+        // annotation data and view have not changed (e.g. the overlay pulse loop).
+        if (!skipDom) {
+            this.renderMapAnnotations();
+            this.renderAnnotationBoxes();
+        }
+
         this.renderCalibrationOverlay();
     }
 
@@ -2315,6 +2410,9 @@ class StoreLayoutViewer {
             this.updateVisibleCameras();
             this.render();
             this.isAnimatingPan = false;
+            // Refresh point cloud cache now that pan has settled
+            this.capturePointCloudCache();
+            this.render();
             return;
         }
 
@@ -3210,24 +3308,19 @@ class StoreLayoutViewer {
 
         if (verts.length === 0) return;
 
-        const buffer = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+        // Reuse pre-allocated buffer (avoids gl.createBuffer/deleteBuffer per frame)
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.calibrationBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.DYNAMIC_DRAW);
 
+        const locs = this.locations.line;
         gl.useProgram(this.lineProgram);
-        const posLoc = gl.getAttribLocation(this.lineProgram, 'a_position');
-        const matLoc = gl.getUniformLocation(this.lineProgram, 'u_viewMatrix');
-        const colorLoc = gl.getUniformLocation(this.lineProgram, 'u_color');
-
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-        gl.uniformMatrix3fv(matLoc, false, this.viewMatrix);
-        gl.uniform4f(colorLoc, 0.90, 0.25, 0.20, 1.0); // red-ish color
+        gl.enableVertexAttribArray(locs.position);
+        gl.vertexAttribPointer(locs.position, 2, gl.FLOAT, false, 0, 0);
+        gl.uniformMatrix3fv(locs.viewMatrix, false, this.viewMatrix);
+        gl.uniform4f(locs.color, 0.90, 0.25, 0.20, 1.0); // red-ish color
 
         gl.lineWidth(2.0);
         gl.drawArrays(gl.LINES, 0, verts.length / 2);
-
-        gl.deleteBuffer(buffer);
     }
 
     restoreCalibration(data) {
@@ -4231,10 +4324,13 @@ class StoreLayoutViewer {
         this._dataBoundsCache = null; // invalidate — will be recomputed by _computeAndCacheBounds
 
         // Refresh all rendering
+        this.pcCacheValid = false; // invalidate — point cloud data changed after rotation
         this.uploadPointCloud();
         this._computeAndCacheBounds();
         this.updateVisibleCameras();
         this.fitView();
+        this.render();
+        this.capturePointCloudCache();
         this.render();
         this.renderAnnotationBoxes();
     }
@@ -4500,6 +4596,12 @@ class StoreLayoutViewer {
                 document.addEventListener('mousemove', onMouseMove);
                 document.addEventListener('mouseup', onMouseUp);
             });
+
+            // Forward wheel events through the annotation box to the map canvas so
+            // that zooming with the scroll wheel works even when the cursor is over a bbox.
+            el.addEventListener('wheel', (e) => {
+                this.onMapWheel(e);
+            }, { passive: false });
         }
 
         return el;
@@ -5311,6 +5413,9 @@ class StoreLayoutViewer {
         // Sync visible cameras now that the drag is over (was skipped during drag for performance)
         this.updateVisibleCameras();
         this.render();
+        // Refresh cache now that pan has settled
+        this.capturePointCloudCache();
+        this.render();
     }
 
     onMapMouseLeave() {
@@ -5383,6 +5488,9 @@ class StoreLayoutViewer {
             this.updateVisibleCameras();
             this.render();
             this.isAnimatingZoom = false;
+            // Refresh cache now that zoom has settled
+            this.capturePointCloudCache();
+            this.render();
             return;
         }
 
@@ -6081,20 +6189,30 @@ class StoreLayoutViewer {
 
         svg.appendChild(polygon);
 
-        // Label text at centroid
-        const cx = screenVerts.reduce((s, v) => s + v.x, 0) / screenVerts.length;
-        const cy = screenVerts.reduce((s, v) => s + v.y, 0) / screenVerts.length;
+        // Label text: boundary → top-left corner; others → centroid
         if (ann.label) {
             const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            text.setAttribute('x', cx);
-            text.setAttribute('y', cy);
-            text.setAttribute('text-anchor', 'middle');
-            text.setAttribute('dominant-baseline', 'central');
+            if (isBoundary) {
+                const bbMinX = Math.min(...screenVerts.map(v => v.x));
+                const bbMinY = Math.min(...screenVerts.map(v => v.y));
+                text.setAttribute('x', bbMinX + 8);
+                text.setAttribute('y', bbMinY - 8);
+                text.setAttribute('text-anchor', 'start');
+                text.setAttribute('dominant-baseline', 'auto');
+                text.setAttribute('stroke', '#000000');
+            } else {
+                const cx = screenVerts.reduce((s, v) => s + v.x, 0) / screenVerts.length;
+                const cy = screenVerts.reduce((s, v) => s + v.y, 0) / screenVerts.length;
+                text.setAttribute('x', cx);
+                text.setAttribute('y', cy);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('dominant-baseline', 'central');
+                text.setAttribute('stroke', theme ? theme.accentColor : '#5050ff');
+            }
             text.setAttribute('font-size', '14');
             text.setAttribute('font-weight', '700');
             text.setAttribute('fill', '#ffffff');
             text.setAttribute('paint-order', 'stroke');
-            text.setAttribute('stroke', theme ? theme.accentColor : '#5050ff');
             text.setAttribute('stroke-width', '4');
             text.style.pointerEvents = 'none';
             text.textContent = ann.label;

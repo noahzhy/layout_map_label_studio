@@ -115,8 +115,21 @@ input[type="checkbox"]:focus-visible {
 
 #glCanvas {
     display: block;
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
+    z-index: 2;
+}
+
+#pcCanvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    pointer-events: none;
+    transform-origin: 50% 50%;
+    will-change: transform;
+    z-index: 1;
 }
 
 #mapAnnotationLayer {
@@ -1347,10 +1360,19 @@ input[type="checkbox"]:focus-visible {
     color: #fff;
 }
 
+.annotation-box--boundary .annotation-label {
+    --annotation-label-color: #000000;
+    top: 4px;
+    left: 4px;
+    transform: none;
+    text-align: left;
+    justify-content: flex-start;
+}
+
 .annotation-delete {
     position: absolute;
-    top: -18px;
-    right: -4px;
+    top: -20px;
+    right: -14px;
     pointer-events: auto;
     cursor: pointer;
     font-size: 18px;
@@ -1393,7 +1415,7 @@ input[type="checkbox"]:focus-visible {
 /* Rotation handle (shown on selected box) */
 .annotation-rotate-line {
     position: absolute;
-    top: -28px;
+    top: -24px;
     left: 50%;
     transform: translateX(-50%);
     width: 1px;
@@ -1405,7 +1427,7 @@ input[type="checkbox"]:focus-visible {
 
 .annotation-rotate-handle {
     position: absolute;
-    top: -46px;
+    top: -40px;
     left: 50%;
     transform: translateX(-50%);
     width: 14px;
