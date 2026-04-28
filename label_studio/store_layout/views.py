@@ -7,7 +7,7 @@ import re
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse, HttpResponseForbidden, HttpResponseNotAllowed, JsonResponse
+from django.http import FileResponse, HttpResponse, HttpResponseForbidden, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -154,7 +154,7 @@ def viewer_page(request, store_id):
 
     return render(request, 'store_layout/viewer.html', {
         'store_id': store_id,
-        'data_base_url': f'/layout-data/{store_id}/',
+        'data_base_url': f'/store_layout/{store_id}/',
         'task': task,
         'project': task.project if task else None,
     })
@@ -223,6 +223,48 @@ def save_data(request, store_id):
     except Exception as e:
         logger.error(f'Failed to save layout data: {e}')
         return HttpResponse(f'Save failed: {e}', status=500)
+
+
+# ── Serve layout files (images, json.gz, etc.) ───────────────────────────────
+
+@login_required
+def serve_file(request, store_id, filename):
+    """Serve files from the store directory.
+
+    Used as a fallback when nginx is not in front of Django (single-container
+    deployments). Performs the same access checks as viewer_page.
+    """
+    if not re.match(r'^[\w\-]+$', store_id):
+        return HttpResponse('Invalid store ID', status=400)
+
+    # Allow nested paths (e.g. images/foo.jpg) but disallow traversal.
+    if '..' in filename.split('/') or filename.startswith('/'):
+        return HttpResponse('Invalid filename', status=400)
+
+    store_path = os.path.join(LAYOUT_DATA_DIR, store_id)
+    if not os.path.isdir(store_path):
+        return HttpResponse('Store not found', status=404)
+
+    # Access check: admins always allowed; annotators must be assigned.
+    if not _is_admin(request.user):
+        if not LayoutTask.objects.filter(store_id=store_id, assigned_to=request.user).exists():
+            return HttpResponseForbidden('Not assigned to this store.')
+
+    target_path = os.path.join(store_path, filename)
+    real_store = os.path.realpath(store_path)
+    real_target = os.path.realpath(target_path)
+    if not real_target.startswith(real_store + os.sep):
+        return HttpResponse('Invalid path', status=400)
+    if not os.path.isfile(real_target):
+        return HttpResponse('File not found', status=404)
+
+    resp = FileResponse(open(real_target, 'rb'))
+    # Pre-gzipped JSON: tell the browser so it auto-decompresses.
+    if filename.endswith('.json.gz'):
+        resp['Content-Type'] = 'application/json'
+        resp['Content-Encoding'] = 'gzip'
+        resp['Cache-Control'] = 'no-cache, must-revalidate'
+    return resp
 
 
 # ── Mark done ────────────────────────────────────────────────────────────────

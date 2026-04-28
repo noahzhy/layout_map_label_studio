@@ -77,6 +77,10 @@ elif [ "$1" = "label-studio-migrate" ]; then
   exec_entrypoint "$ENTRYPOINT_PATH/app-init/"
   exec python3 /label-studio/label_studio/manage.py locked_migrate >&3
 else
+  # Default `label-studio` startup path used by many single-container deployments.
+  # Run shared DB readiness/migration hooks here as well, otherwise the app may
+  # silently fall back to sqlite or start before postgres is ready.
+  exec_entrypoint "$ENTRYPOINT_PATH/common/"
   exec_entrypoint "$ENTRYPOINT_PATH/app-docker/"
   exec_or_wrap_n_exec "$@"
 fi

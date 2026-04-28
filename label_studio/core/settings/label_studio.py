@@ -9,6 +9,10 @@ from core.utils.secret_key import generate_secret_key_if_missing
 SECRET_KEY = generate_secret_key_if_missing(BASE_DATA_DIR)
 
 DJANGO_DB = get_env('DJANGO_DB', DJANGO_DB_SQLITE)
+# If a PostgreSQL host is configured, never fall back to SQLite regardless of
+# what DJANGO_DB is set to (e.g. stale value from /label-studio/data/.env).
+if get_env('POSTGRE_HOST') and DJANGO_DB == DJANGO_DB_SQLITE:
+    DJANGO_DB = 'default'
 DATABASES = {'default': DATABASES_ALL[DJANGO_DB]}
 
 MIDDLEWARE.append('organizations.middleware.DummyGetSessionMiddleware')

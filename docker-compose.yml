@@ -23,7 +23,7 @@ services:
       - ./deploy/nginx/certs:/certs:ro
       # Store Layout: mount static + data for nginx to serve
       - ./label_studio/store_layout/static/store_layout:/label-studio/label_studio/core/static_build/store_layout:ro
-      # Mount updated nginx config with layout-data location block
+      # Mount updated nginx config with store_layout location block
       - ./deploy/default.conf:/etc/nginx/nginx.conf:ro
     #   Optional: Override nginx default conf
     #      - ./deploy/my.conf:/etc/nginx/nginx.conf

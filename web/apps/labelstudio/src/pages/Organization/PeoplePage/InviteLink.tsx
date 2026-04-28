@@ -39,7 +39,7 @@ export function InviteLink({
   return (
     <Modal
       ref={modalRef}
-      title="Invite members"
+      title="邀请链接"
       opened={opened}
       bareFooter={true}
       body={<InvitationModal />}
@@ -57,8 +57,7 @@ const InvitationModal = () => {
     <div className={cn("invite").toClassName()}>
       <Input value={link} style={{ width: "100%" }} readOnly />
       <Typography size="small" className="text-neutral-content-subtler mt-base mb-wider">
-        Invite members to join your Label Studio instance. People that you invite have full access to all of your
-        projects.{" "}
+        邀请成员加入你的 Label Studio 实例。你邀请的人将拥有对你所有项目的完全访问权限。{" "}
         <a
           href="https://labelstud.io/guide/signup.html"
           target="_blank"
@@ -70,7 +69,7 @@ const InvitationModal = () => {
             })
           }
         >
-          Learn more
+          了解更多
         </a>
         .
       </Typography>
@@ -92,7 +91,7 @@ const InvitationFooter = () => {
           onClick={() => refetch()}
           aria-label="Refresh invite link"
         >
-          Reset Link
+          重置链接
         </Button>
       </Space>
       <Space>
@@ -102,7 +101,7 @@ const InvitationFooter = () => {
           onClick={() => copyText(link!)}
           aria-label="Copy invite link"
         >
-          {copied ? "Copied!" : "Copy link"}
+          {copied ? "已复制!" : "复制链接"}
         </Button>
       </Space>
     </Space>

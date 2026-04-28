@@ -12,6 +12,8 @@ labels:
 
   fixture:
     - Entrance
+    - Exit
+    - Entrance/Exit
     - Checkout
     - Shelf
     - Wall shelf

@@ -3,6 +3,7 @@
 import pytest
 from server import _create_user
 from tests.utils import make_annotation, make_project, make_task
+from users.models import User
 
 from label_studio.core.argparser import parse_input_args
 
@@ -13,6 +14,20 @@ def test_create_user():
     config = {}
     user = _create_user(input_args, config)
     assert user.active_organization is not None
+
+
+@pytest.mark.django_db
+def test_create_user_promotes_existing_user_to_superuser():
+  User.objects.create_user(email='admin@clobotics.com', password='old-password')
+
+  input_args = parse_input_args(['init', 'test', '--username', 'admin@clobotics.com', '--password', '12345678'])
+  user = _create_user(input_args, {})
+
+  user.refresh_from_db()
+  assert user.is_staff is True
+  assert user.is_superuser is True
+  assert user.check_password('12345678') is True
+  assert user.active_organization is not None
 
 
 @pytest.mark.django_db

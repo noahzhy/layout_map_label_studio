@@ -11,8 +11,11 @@ set -euo pipefail
 ENV_FILE=".env"
 [[ ! -f "$ENV_FILE" ]] && ENV_FILE=".env.deploy"
 
-DEFAULT_IMAGE=$(grep -E '^IMAGE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')
-DEFAULT_IMAGE="${DEFAULT_IMAGE:-ccr.ccs.tencentyun.com/clobotics/labelstudio-storelayout:latest-amd64}"
+BASE_IMAGE=$(grep -E '^IMAGE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')
+BASE_IMAGE="${BASE_IMAGE:-ccr.ccs.tencentyun.com/clobotics/labelstudio-storelayout:latest-amd64}"
+timestamp=$(date +%Y%m%d%H%M%S)
+# 去掉原有 tag，换成时间戳 tag
+DEFAULT_IMAGE="${BASE_IMAGE%:*}:$timestamp"
 
 IMAGE="${1:-$DEFAULT_IMAGE}"
 
@@ -23,6 +26,13 @@ echo "  平台: linux/amd64"
 echo "========================================"
 
 cd "$(dirname "$0")"
+
+# ─── 同步 .env ─────────────────────────────────────────────────────────────
+# 始终用 .env.deploy 覆盖 .env，确保配置一致
+if [[ -f ".env.deploy" ]]; then
+    cp .env.deploy .env
+    echo "▶ 已同步 .env.deploy → .env"
+fi
 
 # ─── 构建 ──────────────────────────────────────────────────────────────────
 echo ""

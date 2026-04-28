@@ -51,6 +51,8 @@ services:
       - db
     environment:
       - DJANGO_DB=default
+      # get_env() 优先读取 LABEL_STUDIO_*，显式设置可避免平台注入同名变量导致误用 sqlite
+      - LABEL_STUDIO_DJANGO_DB=default
       - POSTGRE_NAME=postgres
       - POSTGRE_USER=postgres
       - POSTGRE_PASSWORD=${POSTGRES_PASSWORD:-}
@@ -58,6 +60,9 @@ services:
       - POSTGRE_HOST=db
       - LABEL_STUDIO_HOST=${LABEL_STUDIO_HOST:-}
       - LABEL_STUDIO_SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-}
+      - LABEL_STUDIO_USERNAME=${LABEL_STUDIO_USERNAME:-}
+      - LABEL_STUDIO_PASSWORD=${LABEL_STUDIO_PASSWORD:-}
       - JSON_LOG=1
       - LABEL_STUDIO_ENABLE_SIGNUP=true
       - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=false

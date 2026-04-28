@@ -160,6 +160,16 @@ DJANGO_DB_POSTGRESQL = 'postgresql'
 DJANGO_DB = 'default'
 DATABASE_NAME_DEFAULT = os.path.join(BASE_DATA_DIR, 'label_studio.sqlite3')
 DATABASE_NAME = get_env('DATABASE_NAME', DATABASE_NAME_DEFAULT)
+
+# Resolve DB engine from environment with a production safety fallback:
+# some deployment platforms inject stale DJANGO_DB=sqlite values into pods.
+# If a Postgres host is configured, prefer PostgreSQL unless the operator later
+# intentionally changes the code/config again.
+RESOLVED_DJANGO_DB = get_env('DJANGO_DB', 'default')
+if get_env('POSTGRE_HOST') and RESOLVED_DJANGO_DB == DJANGO_DB_SQLITE:
+    logger.warning('POSTGRE_HOST is set but DJANGO_DB=sqlite was detected; force switching to PostgreSQL (default).')
+    RESOLVED_DJANGO_DB = 'default'
+
 DATABASES_ALL = {
     DJANGO_DB_POSTGRESQL: {
         'ENGINE': 'django.db.backends.postgresql',
@@ -186,7 +196,7 @@ DATABASES_ALL = {
     },
 }
 DATABASES_ALL['default'] = DATABASES_ALL[DJANGO_DB_POSTGRESQL]
-DATABASES = {'default': DATABASES_ALL.get(get_env('DJANGO_DB', 'default'))}
+DATABASES = {'default': DATABASES_ALL.get(RESOLVED_DJANGO_DB)}
 
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 
@@ -805,6 +815,9 @@ if get_env('STORAGE_TYPE') == 'gcs':
 CSRF_TRUSTED_ORIGINS = get_env('CSRF_TRUSTED_ORIGINS', [])
 if CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS = CSRF_TRUSTED_ORIGINS.split(',')
+
+# Trust X-Forwarded-Proto from reverse proxy (e.g. cloud LB / nginx)
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Custom S3 endpoints on these domains will get detailed error reporting
 S3_TRUSTED_STORAGE_DOMAINS = get_env_list(

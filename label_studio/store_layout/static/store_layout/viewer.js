@@ -3989,7 +3989,7 @@ class StoreLayoutViewer {
         // Helper: type icon for group
         const getTypeIcon = (groupName) => {
             const meta = this.configuredLabelGroupMeta && this.configuredLabelGroupMeta[groupName];
-            if (meta && meta.type === 'polygon') return '⬡ ';
+            if (meta && meta.type === 'polygon') return '';
             return '□ ';
         };
 
@@ -4028,7 +4028,7 @@ class StoreLayoutViewer {
                 panel.className = 'label-picker-panel' + (t === 0 ? ' active' : '');
                 const labels = this.configuredLabelGroups[groupNames[t]] || [];
                 const groupMeta = this.configuredLabelGroupMeta && this.configuredLabelGroupMeta[groupNames[t]];
-                const typeIcon = groupMeta && groupMeta.type === 'polygon' ? '⬡' : '□';
+                const typeIcon = groupMeta && groupMeta.type === 'polygon' ? '' : '';
                 for (let i = 0; i < labels.length; i++) {
                     const label = labels[i];
                     const btn = document.createElement('button');
@@ -6383,13 +6383,16 @@ class StoreLayoutViewer {
 
         // Shelf-specific fields
         if (ann.label === 'Shelf' || ann.label === 'Wall shelf') {
-            content.appendChild(this.buildAttrInput('shelfNumber', 'Shelf #', 'number', attrs, ann));
-            content.appendChild(this.buildAttrSelect('side', 'Side', ['Both', 'Left', 'Right'], attrs, ann));
+            content.appendChild(this.buildAttrInput('shelfNumber', 'Shelf #', 'aisle', attrs, ann));
+            // For horizontal shelves (width > height), use Front/Back instead of Left/Right
+            const isHorizontal = Math.abs(ann.width) > Math.abs(ann.height);
+            const sideOptions = isHorizontal ? ['Both', 'Front', 'Back'] : ['Both', 'Left', 'Right'];
+            content.appendChild(this.buildAttrSelect('side', 'Side', sideOptions, attrs, ann));
         }
 
-        // Notes field: number-only for aisle (displays on bbox), free text for others
+        // Notes field: number or letter (A-Z) for aisle (displays on bbox), free text for others
         if (ann.attribute === 'aisle') {
-            content.appendChild(this.buildAttrInput('notes', 'Aisle ', 'number', attrs, ann, () => this.renderAnnotationBoxes()));
+            content.appendChild(this.buildAttrInput('notes', 'Aisle ', 'aisle', attrs, ann, () => this.renderAnnotationBoxes()));
         } else {
             content.appendChild(this.buildAttrInput('notes', 'Notes', 'text', attrs, ann));
         }
@@ -6401,9 +6404,15 @@ class StoreLayoutViewer {
         const lbl = document.createElement('label');
         lbl.textContent = labelText;
         const inp = document.createElement('input');
-        inp.type = inputType;
+        inp.type = inputType === 'aisle' ? 'text' : inputType;
         inp.value = attrs[key] != null ? attrs[key] : '';
         if (inputType === 'number') { inp.min = '0'; inp.step = '1'; inp.style.width = '60px'; }
+        if (inputType === 'aisle') {
+            inp.placeholder = '数字或字母 A-Z';
+            inp.style.width = '80px';
+            inp.style.textTransform = 'uppercase';
+            inp.addEventListener('input', () => { inp.value = inp.value.toUpperCase().replace(/[^0-9A-Z]/g, ''); });
+        }
         inp.addEventListener('change', () => {
             this.pushHistory();
             attrs[key] = inputType === 'number' ? (parseFloat(inp.value) || 0) : inp.value;
@@ -6447,7 +6456,8 @@ class StoreLayoutViewer {
         let max = 0;
         for (const a of this.annotations) {
             if ((a.label === 'Shelf' || a.label === 'Wall shelf') && a.attributes && a.attributes.shelfNumber != null) {
-                max = Math.max(max, parseInt(a.attributes.shelfNumber, 10) || 0);
+                const n = parseInt(a.attributes.shelfNumber, 10);
+                if (!isNaN(n)) max = Math.max(max, n);
             }
         }
         return max + 1;

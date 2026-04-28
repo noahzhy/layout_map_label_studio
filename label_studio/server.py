@@ -169,6 +169,24 @@ def _create_user(input_args, config):
         print('User {} already exists'.format(username))
 
     user = User.objects.get(email=username)
+    updated_fields = []
+    if password and not user.check_password(password):
+        user.set_password(password)
+        updated_fields.append('password')
+        print(f'User {username} password changed')
+
+    if not user.is_staff:
+        user.is_staff = True
+        updated_fields.append('is_staff')
+
+    if not user.is_superuser:
+        user.is_superuser = True
+        updated_fields.append('is_superuser')
+
+    if updated_fields:
+        user.save(update_fields=updated_fields)
+        print(f'User {username} promoted to Django admin privileges')
+
     org = Organization.objects.first()
     if not org:
         org = Organization.create_organization(
