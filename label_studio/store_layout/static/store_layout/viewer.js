@@ -563,12 +563,19 @@ class StoreLayoutViewer {
         if (Array.isArray(data.annotations)) {
             this.annotations = data.annotations.map(a => {
                 // Backward-compat: ensure type and level fields exist
-                const ann = { ...a };
+                const ann = {
+                    ...a,
+                    attributes: a && typeof a.attributes === 'object' && a.attributes !== null
+                        ? JSON.parse(JSON.stringify(a.attributes))
+                        : {}
+                };
                 if (!ann.type) ann.type = 'bbox';
                 if (ann.level == null) {
                     ann.level = this.getLevelForGroup(ann.attribute);
                 }
-                if (!ann.attributes) ann.attributes = {};
+                if (ann.attribute === 'aisle') {
+                    ann.attributes.side = this.normalizeAisleDirection(ann.attributes.side);
+                }
                 if (ann.type === 'bbox' && ann.angle == null) ann.angle = 0;
                 return ann;
             });
@@ -3677,6 +3684,22 @@ class StoreLayoutViewer {
             : [];
     }
 
+    getAisleDirectionOptions() {
+        return ['Left', 'Right', 'Top', 'Bottom'];
+    }
+
+    normalizeAisleDirection(value) {
+        if (typeof value !== 'string') return '';
+        const normalized = value.trim().toLowerCase();
+        const map = {
+            left: 'Left',
+            right: 'Right',
+            top: 'Top',
+            bottom: 'Bottom',
+        };
+        return map[normalized] || '';
+    }
+
     getCategoryColor(label) {
         const normalized = this.normalizeLabelKey(label);
         if (!normalized || this.categoryColorPalette.length === 0) return null;
@@ -4450,7 +4473,9 @@ class StoreLayoutViewer {
         let labelText = box.label || (box.id !== undefined ? `#${box.id}` : '');
         if (box.attribute === 'aisle' && box.attributes) {
             const notes = box.attributes.notes;
+            const side = this.normalizeAisleDirection(box.attributes.side);
             if (notes != null && notes !== '') labelText = `Aisle ${notes}`;
+            if (side) labelText = labelText ? `${labelText} · ${side}` : side;
         }
         const labelLayout = this.getAnnotationLabelLayout(labelText, w, h);
         labelEl.classList.add(`annotation-label--${labelLayout.orientation}`);
@@ -6343,21 +6368,26 @@ class StoreLayoutViewer {
 
         if (this.selectedAnnotation === null) {
             panel.style.display = 'none';
+            delete panel.dataset.annotationId;
             return;
         }
 
         const ann = this.annotations.find(a => a.id === this.selectedAnnotation);
         if (!ann || !this.annotationMode) {
             panel.style.display = 'none';
+            delete panel.dataset.annotationId;
             return;
         }
 
         // If the user is interacting with an input/select inside the panel,
         // skip rebuilding — re-render triggered by map pan/zoom would destroy
         // the focused element and close any open native dropdowns.
-        if (panel.matches(':focus-within')) return;
+        const renderedAnnotationId = Number.parseInt(panel.dataset.annotationId || '', 10);
+        const isSameAnnotation = renderedAnnotationId === ann.id;
+        if (panel.matches(':focus-within') && isSameAnnotation) return;
 
         panel.style.display = '';
+        panel.dataset.annotationId = String(ann.id);
         content.innerHTML = '';
 
         // Label header badge
@@ -6392,6 +6422,17 @@ class StoreLayoutViewer {
 
         // Notes field: number or letter (A-Z) for aisle (displays on bbox), free text for others
         if (ann.attribute === 'aisle') {
+            content.appendChild(this.buildAttrSelect(
+                'side',
+                'Direction',
+                this.getAisleDirectionOptions(),
+                attrs,
+                ann,
+                (value) => {
+                    attrs.side = this.normalizeAisleDirection(value);
+                    this.renderAnnotationBoxes();
+                }
+            ));
             content.appendChild(this.buildAttrInput('notes', 'Aisle ', 'aisle', attrs, ann, () => this.renderAnnotationBoxes()));
         } else {
             content.appendChild(this.buildAttrInput('notes', 'Notes', 'text', attrs, ann));
@@ -6424,7 +6465,7 @@ class StoreLayoutViewer {
         return field;
     }
 
-    buildAttrSelect(key, labelText, options, attrs, ann) {
+    buildAttrSelect(key, labelText, options, attrs, ann, onAfterChange) {
         const field = document.createElement('div');
         field.className = 'attr-field';
         const lbl = document.createElement('label');
@@ -6445,6 +6486,7 @@ class StoreLayoutViewer {
             this.pushHistory();
             attrs[key] = sel.value;
             this.hasUnsavedChanges = true;
+            if (onAfterChange) onAfterChange(sel.value);
         });
         field.appendChild(lbl);
         field.appendChild(sel);
