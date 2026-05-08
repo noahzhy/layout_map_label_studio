@@ -4610,21 +4610,22 @@ class StoreLayoutViewer {
         return this.findSplitNode(tree.first, nodeId) || this.findSplitNode(tree.second, nodeId);
     }
 
-    splitLeaf(tree, regionId) {
+    splitLeaf(tree, regionId, orientation = 'horizontal') {
+        const splitOrientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
         if (!tree || !regionId || tree.kind !== 'split') return false;
         if (tree.first && tree.first.kind !== 'split' && tree.first.id === regionId) {
             const attrs = JSON.parse(JSON.stringify(tree.first.attributes || {}));
-            tree.first = this.createSplitNode('horizontal', 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
+            tree.first = this.createSplitNode(splitOrientation, 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
             this.selectedSplitRegion = { annotationId: this.selectedAnnotation, regionId: tree.first.first.id };
             return true;
         }
         if (tree.second && tree.second.kind !== 'split' && tree.second.id === regionId) {
             const attrs = JSON.parse(JSON.stringify(tree.second.attributes || {}));
-            tree.second = this.createSplitNode('horizontal', 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
+            tree.second = this.createSplitNode(splitOrientation, 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
             this.selectedSplitRegion = { annotationId: this.selectedAnnotation, regionId: tree.second.first.id };
             return true;
         }
-        return this.splitLeaf(tree.first, regionId) || this.splitLeaf(tree.second, regionId);
+        return this.splitLeaf(tree.first, regionId, splitOrientation) || this.splitLeaf(tree.second, regionId, splitOrientation);
     }
 
     deleteSplitLeaf(tree, regionId) {
@@ -4730,7 +4731,8 @@ class StoreLayoutViewer {
         this.renderMapLegend();
     }
 
-    addSplitToSelectedRegion() {
+    addSplitToSelectedRegion(orientation = 'horizontal') {
+        const splitOrientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
         if (!this.selectedSplitRegion || this.selectedSplitRegion.annotationId !== this.selectedAnnotation) {
             alert('请先选择一个 split boundingbox 的子区域。');
             return;
@@ -4744,11 +4746,11 @@ class StoreLayoutViewer {
         let changed = false;
         if (tree.kind !== 'split' && tree.id === leaf.id) {
             const attrs = JSON.parse(JSON.stringify(tree.attributes || {}));
-            ann.attributes.splitTree = this.createSplitNode('horizontal', 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
+            ann.attributes.splitTree = this.createSplitNode(splitOrientation, 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
             this.selectedSplitRegion = { annotationId: ann.id, regionId: ann.attributes.splitTree.first.id };
             changed = true;
         } else {
-            changed = this.splitLeaf(tree, leaf.id);
+            changed = this.splitLeaf(tree, leaf.id, splitOrientation);
         }
         if (changed) {
             this.hasUnsavedChanges = true;
@@ -6717,7 +6719,14 @@ class StoreLayoutViewer {
             case 'a':
             case 'A':
                 if (!this.readOnly && this.annotationMode) {
-                    this.addSplitToSelectedRegion();
+                    this.addSplitToSelectedRegion('horizontal');
+                }
+                break;
+
+            case 'd':
+            case 'D':
+                if (!this.readOnly && this.annotationMode) {
+                    this.addSplitToSelectedRegion('vertical');
                 }
                 break;
 
