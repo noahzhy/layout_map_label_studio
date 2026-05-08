@@ -222,6 +222,7 @@ class StoreLayoutViewer {
         this.dataBaseUrl = options.dataBaseUrl || './';
         this.saveBaseUrl = options.saveBaseUrl || '';
         this.labelsYamlUrl = options.labelsYamlUrl || 'labels.yaml';
+        this.businessCategoryYamlUrl = options.businessCategoryYamlUrl || 'business_l1_l2.yaml';
 
         // Per-image recognition/taxonomy data (from recognize_task.py)
         this.recogData = {};
@@ -250,6 +251,8 @@ class StoreLayoutViewer {
         this.configuredLabelGroups = {}; // { groupName: [labels] } from labels.yaml
         this.configuredLabelGroupNames = []; // ordered group names
         this.configuredLabelGroupMeta = {};  // { groupName: {type, level, color} } from label_metadata
+        this.businessCategoryStores = []; // [{ name, categories, categoryOrder, categoryIndex }] from business_l1_l2.yaml
+        this.businessCategoryStoreIndex = new Map(); // normalized storeName -> store entry
         this.categoryColorPalette = [
             '#FF0000', '#00FF00', '#0000FF', '#FFFF00',
             '#FF00FF', '#00FFFF', '#FFA500', '#800080',
@@ -359,6 +362,7 @@ class StoreLayoutViewer {
         this.setupWebGL();
         this.setupEventListeners();
         this.loadLabelsConfig();
+        this.loadBusinessCategoryConfig();
         this.resize();
         this.render();
         this.tryAutoLoad();
@@ -3683,6 +3687,100 @@ class StoreLayoutViewer {
         } catch (e) { /* labels.yaml not available */ }
     }
 
+    async loadBusinessCategoryConfig() {
+        try {
+            const resp = await fetch(this.businessCategoryYamlUrl);
+            if (!resp.ok) return;
+            const text = await resp.text();
+            const stores = this.parseBusinessCategoryYaml(text);
+            this.businessCategoryStores = stores;
+            this.businessCategoryStoreIndex = new Map();
+
+            for (const store of stores) {
+                const key = this.normalizeLabelKey(store.name);
+                if (key && !this.businessCategoryStoreIndex.has(key)) {
+                    this.businessCategoryStoreIndex.set(key, store);
+                }
+            }
+
+            this.renderMapLegend();
+            this.updateAttributesPanel();
+        } catch (e) { /* business_l1_l2.yaml not available */ }
+    }
+
+    parseBusinessCategoryYaml(text) {
+        const stores = [];
+        let currentStore = null;
+        let currentCategory = null;
+
+        const ensureCategoryIndex = (store) => {
+            if (!store.categoryIndex) store.categoryIndex = new Map();
+            for (const category of store.categoryOrder) {
+                const key = this.normalizeLabelKey(category);
+                if (key && !store.categoryIndex.has(key)) {
+                    store.categoryIndex.set(key, category);
+                }
+            }
+        };
+
+        for (const rawLine of text.split('\n')) {
+            const line = rawLine.replace(/\r$/, '');
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+
+            const indent = (line.match(/^\s*/) || [''])[0].length;
+            const keyMatch = trimmed.match(/^(?:"([^"]+)"|'([^']+)'|([^:]+?))\s*:\s*$/);
+            const itemMatch = trimmed.match(/^-\s+(.+)$/);
+
+            if (indent === 0 && keyMatch) {
+                const storeName = this.parseBusinessYamlScalar(keyMatch[1] || keyMatch[2] || keyMatch[3]);
+                currentStore = {
+                    name: storeName,
+                    categories: {},
+                    categoryOrder: [],
+                    categoryIndex: new Map(),
+                };
+                stores.push(currentStore);
+                currentCategory = null;
+                continue;
+            }
+
+            if (indent > 0 && indent <= 4 && keyMatch && currentStore) {
+                const category = this.parseBusinessYamlScalar(keyMatch[1] || keyMatch[2] || keyMatch[3]);
+                currentCategory = category;
+                if (!currentStore.categories[currentCategory]) {
+                    currentStore.categories[currentCategory] = [];
+                    currentStore.categoryOrder.push(currentCategory);
+                }
+                continue;
+            }
+
+            if (indent >= 2 && itemMatch && currentStore && currentCategory) {
+                const item = this.parseBusinessYamlScalar(itemMatch[1]);
+                if (item && !currentStore.categories[currentCategory].includes(item)) {
+                    currentStore.categories[currentCategory].push(item);
+                }
+            }
+        }
+
+        for (const store of stores) ensureCategoryIndex(store);
+        return stores;
+    }
+
+    parseBusinessYamlScalar(value) {
+        if (value == null) return '';
+        let result = String(value).trim();
+        const commentIndex = result.search(/\s+#/);
+        if (commentIndex >= 0) result = result.slice(0, commentIndex).trim();
+        if (
+            (result.startsWith('"') && result.endsWith('"')) ||
+            (result.startsWith("'") && result.endsWith("'"))
+        ) {
+            result = result.slice(1, -1);
+        }
+        return result.replace(/\\"/g, '"').replace(/\\'/g, "'");
+    }
+
     saveCustomLabel(label) {
         const STORAGE_KEY = 'storeBEV_customLabels';
         try {
@@ -3709,10 +3807,48 @@ class StoreLayoutViewer {
         return typeof label === 'string' ? label.trim().toLowerCase() : '';
     }
 
-    getCategoryLabels() {
+    getConfiguredCategoryLabels() {
         return Array.isArray(this.configuredLabelGroups.category)
             ? this.configuredLabelGroups.category
             : [];
+    }
+
+    getCategoryLabels() {
+        const businessCategories = this.getBusinessCategoryOptions();
+        return businessCategories.length > 0 ? businessCategories : this.getConfiguredCategoryLabels();
+    }
+
+    getCurrentBusinessStoreName() {
+        return this.metadata && typeof this.metadata.storeName === 'string'
+            ? this.metadata.storeName.trim()
+            : '';
+    }
+
+    getCurrentBusinessCategoryStore() {
+        const storeName = this.getCurrentBusinessStoreName();
+        const normalized = this.normalizeLabelKey(storeName);
+        if (!normalized) return null;
+        return this.businessCategoryStoreIndex.get(normalized) || null;
+    }
+
+    getBusinessCategoryOptions() {
+        const store = this.getCurrentBusinessCategoryStore();
+        return store && Array.isArray(store.categoryOrder) ? store.categoryOrder : [];
+    }
+
+    getBusinessSubcategoryOptions(category) {
+        const store = this.getCurrentBusinessCategoryStore();
+        if (!store || !category) return [];
+        const normalized = this.normalizeLabelKey(category);
+        const canonicalCategory = store.categoryIndex.get(normalized);
+        return canonicalCategory && Array.isArray(store.categories[canonicalCategory])
+            ? store.categories[canonicalCategory]
+            : [];
+    }
+
+    annotationSupportsBusinessCategory(ann) {
+        if (!ann || !ann.attribute) return false;
+        return ['fixture', 'aisle', 'area', 'category'].includes(ann.attribute);
     }
 
     getAisleDirectionOptions() {
@@ -4348,6 +4484,7 @@ class StoreLayoutViewer {
             attributes: {
                 regionType: rawType === 'Fixture' ? 'Other' : rawType,
                 category: attrs.category || '',
+                subcategory: attrs.subcategory || '',
                 aisle: attrs.aisle || '',
                 side: this.normalizeAisleDirection(attrs.side) || '',
                 notes: attrs.notes || '',
@@ -4394,27 +4531,26 @@ class StoreLayoutViewer {
             if (node.kind === 'split') {
                 const orientation = node.orientation === 'vertical' ? 'vertical' : 'horizontal';
                 const rawRatio = Number.isFinite(node.ratio) ? node.ratio : parseFloat(node.ratio);
-                return {
-                    id: node.id || this.generateSplitNodeId('s'),
-                    kind: 'split',
-                    orientation,
-                    ratio: this.clampSplitRatio(Number.isFinite(rawRatio) ? rawRatio : 0.5),
-                    first: normalizeNode(node.first),
-                    second: normalizeNode(node.second),
-                };
+                node.id = node.id || this.generateSplitNodeId('s');
+                node.kind = 'split';
+                node.orientation = orientation;
+                node.ratio = this.clampSplitRatio(Number.isFinite(rawRatio) ? rawRatio : 0.5);
+                node.first = normalizeNode(node.first);
+                node.second = normalizeNode(node.second);
+                return node;
             }
-            const attrs = node.attributes && typeof node.attributes === 'object' ? JSON.parse(JSON.stringify(node.attributes)) : {};
+            const attrs = node.attributes && typeof node.attributes === 'object' ? node.attributes : {};
             attrs.regionType = attrs.regionType || attrs.label || attrs.type || 'Other';
             if (attrs.regionType === 'Fixture') attrs.regionType = 'Other';
             attrs.category = attrs.category || '';
+            attrs.subcategory = attrs.subcategory || '';
             attrs.aisle = attrs.aisle || '';
             attrs.side = this.normalizeAisleDirection(attrs.side) || '';
             attrs.notes = attrs.notes || '';
-            return {
-                id: node.id || this.generateSplitNodeId('r'),
-                kind: 'leaf',
-                attributes: attrs,
-            };
+            node.id = node.id || this.generateSplitNodeId('r');
+            node.kind = 'leaf';
+            node.attributes = attrs;
+            return node;
         };
         return normalizeNode(tree);
     }
@@ -4542,6 +4678,7 @@ class StoreLayoutViewer {
         const parts = [];
         if (attrs.regionType) parts.push(attrs.regionType);
         if (attrs.category) parts.push(attrs.category);
+        if (attrs.subcategory) parts.push(attrs.subcategory);
         const aisle = attrs.aisle || attrs.notes;
         if (aisle) parts.push(`Aisle ${aisle}`);
         const side = this.normalizeAisleDirection(attrs.side);
@@ -7207,13 +7344,15 @@ class StoreLayoutViewer {
 
         if (splitLeaf) {
             const attrs = splitLeaf.attributes || (splitLeaf.attributes = {});
-            content.appendChild(this.buildAttrSelect('regionType', 'Label / Type', this.getSplitRegionTypeOptions(), attrs, ann, () => this.renderAnnotationBoxes()));
-            const categoryLabels = this.getCategoryLabels();
-            if (categoryLabels.length > 0) {
-                content.appendChild(this.buildAttrSelect('category', 'Category', categoryLabels, attrs, ann, () => this.renderAnnotationBoxes()));
-            }
-            content.appendChild(this.buildAttrInput('aisle', 'Aisle ', 'aisle', attrs, ann, () => this.renderAnnotationBoxes()));
-            content.appendChild(this.buildAttrSelect(
+            const refreshSplitRegionDisplay = () => this.refreshAnnotationAttributeDisplay();
+            const splitPrimaryRow = this.buildAttrRow('attr-row--three');
+            splitPrimaryRow.appendChild(this.buildAttrSelect('regionType', 'Label / Type', this.getSplitRegionTypeOptions(), attrs, ann, refreshSplitRegionDisplay));
+            this.appendBusinessCategoryFields(splitPrimaryRow, attrs, ann);
+            content.appendChild(splitPrimaryRow);
+
+            const splitSecondaryRow = this.buildAttrRow('attr-row--two');
+            splitSecondaryRow.appendChild(this.buildAttrInput('aisle', 'Aisle ', 'aisle', attrs, ann, refreshSplitRegionDisplay));
+            splitSecondaryRow.appendChild(this.buildAttrSelect(
                 'side',
                 'Direction',
                 this.getAisleDirectionOptions(),
@@ -7221,21 +7360,22 @@ class StoreLayoutViewer {
                 ann,
                 (value) => {
                     attrs.side = this.normalizeAisleDirection(value);
-                    this.renderAnnotationBoxes();
+                    refreshSplitRegionDisplay();
                 }
             ));
-            content.appendChild(this.buildAttrInput('notes', 'Notes', 'text', attrs, ann, () => this.renderAnnotationBoxes()));
+            content.appendChild(splitSecondaryRow);
+
+            const splitNotesRow = this.buildAttrRow('attr-row--single');
+            splitNotesRow.appendChild(this.buildAttrInput('notes', 'Notes', 'text', attrs, ann, refreshSplitRegionDisplay));
+            content.appendChild(splitNotesRow);
             return;
         }
 
         const attrs = ann.attributes || (ann.attributes = {});
 
-        // Category dropdown (for fixture group and aisle)
-        if (ann.attribute === 'fixture' || ann.attribute === 'aisle') {
-            const categoryLabels = this.getCategoryLabels();
-            if (categoryLabels.length > 0) {
-                content.appendChild(this.buildAttrSelect('category', 'Category', categoryLabels, attrs, ann));
-            }
+        // Store-specific Category / Sub-category dropdowns for classifiable annotations.
+        if (this.annotationSupportsBusinessCategory(ann)) {
+            this.appendBusinessCategoryFields(content, attrs, ann);
         }
 
         // Shelf-specific fields
@@ -7266,6 +7406,112 @@ class StoreLayoutViewer {
         }
     }
 
+    updateAttributesHeaderLabel() {
+        const panel = document.getElementById('attributesPanel');
+        const content = document.getElementById('attributesPanelContent');
+        if (!panel || !content) return;
+
+        const badge = content.querySelector('.attr-label-header');
+        if (!badge) return;
+
+        const annotationId = Number.parseInt(panel.dataset.annotationId || '', 10);
+        if (!Number.isFinite(annotationId)) return;
+
+        const ann = this.annotations.find(a => a.id === annotationId);
+        if (!ann) return;
+
+        const splitRegionId = panel.dataset.splitRegionId || '';
+        if (splitRegionId && ann.type === 'split-bbox') {
+            const splitLeaf = this.findSplitLeaf(this.getSplitRoot(ann), splitRegionId);
+            badge.textContent = splitLeaf ? this.getSplitRegionLabel(splitLeaf) : (ann.label || `#${ann.id}`);
+            return;
+        }
+
+        badge.textContent = ann.label || `#${ann.id}`;
+    }
+
+    refreshAnnotationAttributeDisplay() {
+        if (this._annotationAttributeDisplayRaf) {
+            cancelAnimationFrame(this._annotationAttributeDisplayRaf);
+        }
+        this._annotationAttributeDisplayRaf = requestAnimationFrame(() => {
+            this._annotationAttributeDisplayRaf = null;
+            this.renderAnnotationBoxes();
+            this.renderMapLegend();
+            this.updateAttributesHeaderLabel();
+        });
+    }
+
+    refreshBusinessCategoryDisplay() {
+        this.refreshAnnotationAttributeDisplay();
+    }
+
+    populateSelectOptions(selectEl, options, selectedValue) {
+        if (!selectEl) return;
+        selectEl.textContent = '';
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = '—';
+        selectEl.appendChild(emptyOpt);
+
+        const values = Array.isArray(options) ? [...options] : [];
+        if (selectedValue && !values.includes(selectedValue)) {
+            values.unshift(selectedValue);
+        }
+
+        for (const opt of values) {
+            const o = document.createElement('option');
+            o.value = opt;
+            o.textContent = opt;
+            if (selectedValue === opt) o.selected = true;
+            selectEl.appendChild(o);
+        }
+
+        selectEl.value = selectedValue && values.includes(selectedValue) ? selectedValue : '';
+        selectEl.dataset.attrLastValue = selectEl.value;
+    }
+
+    appendBusinessCategoryFields(content, attrs, ann, onAfterChange) {
+        const categoryOptions = this.getCategoryLabels();
+        if (categoryOptions.length === 0) return false;
+
+        const handleAfterChange = (value) => {
+            this.refreshBusinessCategoryDisplay();
+            if (onAfterChange) onAfterChange(value);
+        };
+
+        let subcategoryField = null;
+        const categoryField = this.buildAttrSelect(
+            'category',
+            'Category',
+            categoryOptions,
+            attrs,
+            ann,
+            (value) => {
+                const subcategoryOptions = this.getBusinessSubcategoryOptions(value);
+                if (attrs.subcategory && !subcategoryOptions.includes(attrs.subcategory)) {
+                    attrs.subcategory = '';
+                }
+                const subcategorySelect = subcategoryField ? subcategoryField.querySelector('select') : null;
+                this.populateSelectOptions(subcategorySelect, subcategoryOptions, attrs.subcategory || '');
+                handleAfterChange(value);
+            }
+        );
+        content.appendChild(categoryField);
+
+        const subcategoryOptions = this.getBusinessSubcategoryOptions(attrs.category);
+        subcategoryField = this.buildAttrSelect(
+            'subcategory',
+            'Sub-category',
+            subcategoryOptions,
+            attrs,
+            ann,
+            handleAfterChange
+        );
+        content.appendChild(subcategoryField);
+        return true;
+    }
+
     buildAttrInput(key, labelText, inputType, attrs, ann, onAfterChange) {
         const field = document.createElement('div');
         field.className = 'attr-field';
@@ -7292,29 +7538,31 @@ class StoreLayoutViewer {
         return field;
     }
 
+    buildAttrRow(...classNames) {
+        const row = document.createElement('div');
+        row.className = ['attr-row', ...classNames.filter(Boolean)].join(' ');
+        return row;
+    }
+
     buildAttrSelect(key, labelText, options, attrs, ann, onAfterChange) {
         const field = document.createElement('div');
         field.className = 'attr-field';
         const lbl = document.createElement('label');
         lbl.textContent = labelText;
         const sel = document.createElement('select');
-        const emptyOpt = document.createElement('option');
-        emptyOpt.value = '';
-        emptyOpt.textContent = '—';
-        sel.appendChild(emptyOpt);
-        for (const opt of options) {
-            const o = document.createElement('option');
-            o.value = opt;
-            o.textContent = opt;
-            if (attrs[key] === opt) o.selected = true;
-            sel.appendChild(o);
-        }
-        sel.addEventListener('change', () => {
+        this.populateSelectOptions(sel, options, attrs[key] != null ? attrs[key] : '');
+        const handleSelectValueChange = () => {
+            const nextValue = sel.value;
+            const lastValue = sel.dataset.attrLastValue || '';
+            if (nextValue === lastValue) return;
             this.pushHistory();
-            attrs[key] = sel.value;
+            attrs[key] = nextValue;
+            sel.dataset.attrLastValue = nextValue;
             this.hasUnsavedChanges = true;
-            if (onAfterChange) onAfterChange(sel.value);
-        });
+            if (onAfterChange) onAfterChange(nextValue);
+        };
+        sel.addEventListener('input', handleSelectValueChange);
+        sel.addEventListener('change', handleSelectValueChange);
         field.appendChild(lbl);
         field.appendChild(sel);
         return field;
@@ -7367,5 +7615,6 @@ document.addEventListener('DOMContentLoaded', () => {
         dataBaseUrl: window.LAYOUT_DATA_BASE_URL || './',
         saveBaseUrl: window.LAYOUT_SAVE_BASE_URL || '',
         labelsYamlUrl: window.LAYOUT_LABELS_YAML_URL || 'labels.yaml',
+        businessCategoryYamlUrl: window.LAYOUT_BUSINESS_L1_L2_YAML_URL || 'business_l1_l2.yaml',
     });
 });

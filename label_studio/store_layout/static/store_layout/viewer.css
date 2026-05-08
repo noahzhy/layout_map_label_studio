@@ -1099,6 +1099,25 @@ input[type="checkbox"]:focus-visible {
     align-items: flex-start;
 }
 
+.attr-row {
+    width: 100%;
+    display: grid;
+    gap: 8px;
+    align-items: start;
+}
+
+.attr-row--three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.attr-row--two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.attr-row--single {
+    grid-template-columns: minmax(0, 1fr);
+}
+
 .attr-field {
     display: flex;
     flex-direction: column;
@@ -1797,5 +1816,10 @@ body.split-divider-dragging * {
     #imagePanel {
         min-width: unset;
         height: 60vh;
+    }
+
+    .attr-row--three,
+    .attr-row--two {
+        grid-template-columns: minmax(0, 1fr);
     }
 }
