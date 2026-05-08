@@ -241,6 +241,8 @@ class StoreLayoutViewer {
         this.rotationAngle = 0;        // cumulative rotation in degrees
         this.nextAnnotationId = 1;
         this.selectedAnnotation = null; // id of currently selected annotation box
+        this.selectedSplitRegion = null; // { annotationId, regionId } for split-bbox leaf selection
+        this.isSplitBoxDrawMode = false;
         this.isDrawingBox = false;
         this.drawStartWorld = null;     // {x, y} world coords of box start
         this.drawCurrentWorld = null;   // {x, y} current mouse world coords
@@ -256,11 +258,13 @@ class StoreLayoutViewer {
         ];
         this.categoryColorAssignments = new Map();
         this.pendingBox = null;         // box awaiting label selection
+        this.pendingBoxKind = 'bbox';   // 'bbox' or 'split-bbox'
         this.pendingPolygon = null;     // polygon awaiting label selection
         this.isDraggingAnnotation = false;
         this.dragAnnotationId = null;
         this.dragAnnotationOffset = null; // {dx, dy} offset from box origin to grab point
         this.hasUnsavedChanges = false;
+        this.draggingSplitDivider = null;
 
         // Polygon draw mode state
         this.isDrawingPolygon = false;
@@ -306,6 +310,7 @@ class StoreLayoutViewer {
 
         // Performance: track overlay count to rebuild static color buffers only when needed
         this._overlayBufferCount = 0;
+        this._overlayColorSignature = '';
 
         // WebGL resources
         this.pointProgram = null;
@@ -576,7 +581,11 @@ class StoreLayoutViewer {
                 if (ann.attribute === 'aisle') {
                     ann.attributes.side = this.normalizeAisleDirection(ann.attributes.side);
                 }
+                if (ann.type === 'split-bbox') {
+                    ann.attributes.splitTree = this.normalizeSplitTree(ann.attributes.splitTree);
+                }
                 if (ann.type === 'bbox' && ann.angle == null) ann.angle = 0;
+                if (ann.type === 'split-bbox' && ann.angle == null) ann.angle = 0;
                 return ann;
             });
             this.nextAnnotationId = this.annotations.reduce((max, a) => Math.max(max, (a.id || 0) + 1), 1);
@@ -803,6 +812,35 @@ class StoreLayoutViewer {
             return cam.title.trim();
         }
         return cam.imageName || '';
+    }
+
+    getCameraPointColor(cam) {
+        if (this.hoveredCamera === cam.id) {
+            return [0.965, 0.831, 0.278, 1.0]; // Yellow - hovered
+        }
+        if (this.selectedCamera === cam.id && !this.isAnimatingSelectedIndicator) {
+            return [0.965, 0.831, 0.278, 1.0]; // Yellow - selected
+        }
+        if (cam.isManualCompanion) {
+            return [0.604, 0.804, 0.196, 1.0]; // Yellow-green - manual companion
+        }
+        if (cam.isOverlay) {
+            return [0.98, 0.45, 0.18, 1.0]; // Orange - special overlay point
+        }
+        return [0.086, 0.239, 0.545, 1.0]; // Dark blue - normal
+    }
+
+    getOverlayMarkerColors(cam) {
+        if (cam.isManualCompanion) {
+            return {
+                halo: [0.78, 0.92, 0.34, 0.35],
+                core: [0.604, 0.804, 0.196, 1.0],
+            };
+        }
+        return {
+            halo: [1.0, 0.44, 0.12, 0.35],
+            core: [0.98, 0.45, 0.18, 1.0],
+        };
     }
 
     getThumbnailCaption(cam) {
@@ -1135,16 +1173,13 @@ class StoreLayoutViewer {
     uploadVisibleCameras() {
         const gl = this.gl;
         const cams = this.visibleCameras;
-        const hoveredId = this.hoveredCamera;
-        const selectedId = this.selectedCamera;
-        const suppressSelectedBase = this.isAnimatingSelectedIndicator;
 
         // Draw order matters in WebGL point rendering. Keep highlighted cameras last
         // so they always appear on top of non-highlighted cameras.
         const camsDrawOrder = [...cams].sort((a, b) => {
             const rank = (cam) => {
-                if (hoveredId !== null && cam.id === hoveredId) return 2;
-                if (selectedId !== null && cam.id === selectedId) return 1;
+                if (this.hoveredCamera !== null && cam.id === this.hoveredCamera) return 2;
+                if (this.selectedCamera !== null && cam.id === this.selectedCamera) return 1;
                 return 0;
             };
             return rank(a) - rank(b);
@@ -1155,18 +1190,7 @@ class StoreLayoutViewer {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.cameraBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
 
-        // Colors -- all cameras same base color, only selected/hovered differ
-        const colors = new Float32Array(camsDrawOrder.flatMap(c => {
-            if (this.hoveredCamera === c.id) {
-                return [0.965, 0.831, 0.278, 1.0]; // Yellow - hovered
-            } else if (this.selectedCamera === c.id && !suppressSelectedBase) {
-                return [0.965, 0.831, 0.278, 1.0]; // Yellow - selected
-            } else if (c.isOverlay) {
-                return [0.98, 0.45, 0.18, 1.0]; // Orange - special overlay point
-            } else {
-                return [0.086, 0.239, 0.545, 1.0]; // Dark blue - normal
-            }
-        }));
+        const colors = new Float32Array(camsDrawOrder.flatMap(c => this.getCameraPointColor(c)));
         gl.bindBuffer(gl.ARRAY_BUFFER, this.cameraColorBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
 
@@ -1180,17 +1204,20 @@ class StoreLayoutViewer {
             gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayCameraBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, overlayPositions, gl.DYNAMIC_DRAW);
 
-            // Rebuild static halo/core color buffers only when the overlay set changes size.
-            // These colors are constant per overlay count — no need to re-upload every frame.
-            if (overlayCount !== this._overlayBufferCount) {
+            const overlayColorSignature = this.overlayVisibleCameras
+                .map(c => `${c.id}:${c.isManualCompanion ? 'manual' : (c.overlayKind || 'overlay')}`)
+                .join('|');
+
+            // Rebuild static halo/core color buffers only when overlay membership or color kind changes.
+            if (overlayCount !== this._overlayBufferCount || overlayColorSignature !== this._overlayColorSignature) {
                 this._overlayBufferCount = overlayCount;
+                this._overlayColorSignature = overlayColorSignature;
                 const haloData = new Float32Array(overlayCount * 4);
                 const coreData = new Float32Array(overlayCount * 4);
                 for (let i = 0; i < overlayCount; i++) {
-                    haloData[i * 4 + 0] = 1.0;  haloData[i * 4 + 1] = 0.44;
-                    haloData[i * 4 + 2] = 0.12; haloData[i * 4 + 3] = 0.35;
-                    coreData[i * 4 + 0] = 0.98;  coreData[i * 4 + 1] = 0.45;
-                    coreData[i * 4 + 2] = 0.18;  coreData[i * 4 + 3] = 1.0;
+                    const overlayColors = this.getOverlayMarkerColors(this.overlayVisibleCameras[i]);
+                    haloData.set(overlayColors.halo, i * 4);
+                    coreData.set(overlayColors.core, i * 4);
                 }
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayHaloColorBuffer);
                 gl.bufferData(gl.ARRAY_BUFFER, haloData, gl.STATIC_DRAW);
@@ -1199,6 +1226,7 @@ class StoreLayoutViewer {
             }
         } else {
             this._overlayBufferCount = 0;
+            this._overlayColorSignature = '';
         }
 
         this.updateDirectionBuffer();
@@ -3125,6 +3153,7 @@ class StoreLayoutViewer {
             if (this.isDrawingPolygon) this.cancelPolygon();
             this.isDrawingBox = false;
             this.isBoxDrawMode = false;
+            this.isSplitBoxDrawMode = false;
             this.drawStartWorld = null;
             this.calibrationPoints = [];
             this.canvas.style.cursor = 'crosshair';
@@ -3372,6 +3401,7 @@ class StoreLayoutViewer {
         this.isDrawingBox = false;
         this.drawStartWorld = null;
         this.isBoxDrawMode = false;
+        this.isSplitBoxDrawMode = false;
         this.canvas.style.cursor = 'grab';
         this.drawCurrentWorld = null;
         this.renderAnnotationBoxes();
@@ -3397,6 +3427,7 @@ class StoreLayoutViewer {
             // Exit box draw mode
             this.isDrawingBox = false;
             this.isBoxDrawMode = false;
+            this.isSplitBoxDrawMode = false;
             this.drawStartWorld = null;
             this.drawCurrentWorld = null;
         }
@@ -3856,6 +3887,18 @@ class StoreLayoutViewer {
         return this.getLabelTheme(box.label, box.attribute);
     }
 
+    getSplitBoxTheme() {
+        return this.getLabelTheme('SplitBox', 'fixture') || {
+            accentColor: '#2980b9',
+            borderColor: '#2980b9',
+            backgroundColor: 'rgba(41, 128, 185, 0.12)',
+            pickerBorderColor: 'rgba(41, 128, 185, 0.45)',
+            pickerBackgroundColor: 'rgba(41, 128, 185, 0.12)',
+            labelColor: '#2980b9',
+            labelTextColor: '#ffffff',
+        };
+    }
+
     getAnnotationLabelLayout(label, boxWidthPx, boxHeightPx) {
         const text = typeof label === 'string' ? label.trim() : '';
         if (!text) {
@@ -3920,6 +3963,40 @@ class StoreLayoutViewer {
         button.style.borderColor = theme.pickerBorderColor;
         button.style.background = theme.pickerBackgroundColor;
         button.style.boxShadow = `inset 3px 0 0 ${theme.accentColor}`;
+    }
+
+    applySplitBoxTheme(boxEl) {
+        if (!boxEl) return;
+
+        const theme = this.getSplitBoxTheme();
+        if (!theme) return;
+
+        boxEl.style.setProperty('--annotation-border-color', theme.borderColor || theme.accentColor);
+        boxEl.style.setProperty('--annotation-box-bg', theme.backgroundColor || this.hexToRgba(theme.accentColor, 0.12));
+        boxEl.style.setProperty('--split-region-border-color', theme.pickerBorderColor || theme.borderColor || theme.accentColor);
+        boxEl.style.setProperty('--split-region-bg', theme.backgroundColor || this.hexToRgba(theme.accentColor, 0.12));
+        boxEl.style.setProperty('--split-region-bg-hover', this.hexToRgba(theme.accentColor, 0.16));
+        boxEl.style.setProperty('--split-region-label-color', theme.accentColor);
+        boxEl.style.setProperty('--split-divider-color', this.hexToRgba(theme.accentColor, 0.90));
+        boxEl.style.setProperty('--split-divider-shadow', `0 0 0 1px rgba(255, 255, 255, 0.75), 0 0 5px ${this.hexToRgba(theme.accentColor, 0.38)}`);
+    }
+
+    applySplitRegionLabelLayout(labelEl, text, boxWidthPx, boxHeightPx) {
+        if (!labelEl) return;
+
+        const labelLayout = this.getAnnotationLabelLayout(text, boxWidthPx, boxHeightPx);
+        labelEl.classList.toggle('split-region-label--vertical', labelLayout.orientation === 'vertical');
+        labelEl.classList.toggle('split-region-label--horizontal', labelLayout.orientation !== 'vertical');
+
+        if (labelLayout.orientation === 'vertical') {
+            labelEl.style.maxWidth = `${Math.max(0, boxHeightPx - 8)}px`;
+            labelEl.style.maxHeight = `${Math.max(0, boxWidthPx - 8)}px`;
+        } else {
+            labelEl.style.maxWidth = `${Math.max(0, boxWidthPx - 8)}px`;
+            labelEl.style.maxHeight = `${Math.max(0, boxHeightPx - 8)}px`;
+        }
+
+        this.populateAnnotationLabelContent(labelEl, text, labelLayout.orientation);
     }
 
     getMapAnnotationColors(annotation) {
@@ -4241,6 +4318,7 @@ class StoreLayoutViewer {
         }
         this.hasUnsavedChanges = true;
         this.isBoxDrawMode = false;
+        this.isSplitBoxDrawMode = false;
         this.canvas.style.cursor = 'grab';
         this.hideLabelPicker();
         this.renderAnnotationBoxes();
@@ -4249,11 +4327,651 @@ class StoreLayoutViewer {
 
     cancelPendingBox() {
         this.isBoxDrawMode = false;
+        this.isSplitBoxDrawMode = false;
         this.isDrawingPolygon = false;
         this.polygonCurrentVertices = [];
+        this.pendingBoxKind = 'bbox';
         this.canvas.style.cursor = 'grab';
         this.hideLabelPicker();
         this.renderAnnotationBoxes();
+    }
+
+    // ========================================================================
+    // Split Bounding Boxes
+    // ========================================================================
+
+    createSplitLeaf(attrs = {}) {
+        const rawType = attrs.regionType || attrs.label || 'Other';
+        return {
+            id: this.generateSplitNodeId('r'),
+            kind: 'leaf',
+            attributes: {
+                regionType: rawType === 'Fixture' ? 'Other' : rawType,
+                category: attrs.category || '',
+                aisle: attrs.aisle || '',
+                side: this.normalizeAisleDirection(attrs.side) || '',
+                notes: attrs.notes || '',
+            },
+        };
+    }
+
+    generateSplitNodeId(prefix = 'n') {
+        return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    }
+
+    createSplitNode(orientation, ratio, first, second) {
+        return {
+            id: this.generateSplitNodeId('s'),
+            kind: 'split',
+            orientation,
+            ratio: this.clampSplitRatio(ratio),
+            first,
+            second,
+        };
+    }
+
+    createDefaultSplitTree(width, height) {
+        const leftOrTop = this.createSplitLeaf({ regionType: 'Endcap' });
+        const centerA = this.createSplitLeaf({ regionType: 'Shelf' });
+        const centerB = this.createSplitLeaf({ regionType: 'Shelf' });
+        const rightOrBottom = this.createSplitLeaf({ regionType: 'Endcap' });
+
+        if (Math.abs(width) > Math.abs(height)) {
+            const middle = this.createSplitNode('horizontal', 0.5, centerA, centerB);
+            const middleAndRight = this.createSplitNode('vertical', 0.9, middle, rightOrBottom);
+            return this.createSplitNode('vertical', 1 / 10, leftOrTop, middleAndRight);
+        }
+
+        const middle = this.createSplitNode('vertical', 0.5, centerA, centerB);
+        const middleAndBottom = this.createSplitNode('horizontal', 0.9, middle, rightOrBottom);
+        return this.createSplitNode('horizontal', 1 / 10, leftOrTop, middleAndBottom);
+    }
+
+    normalizeSplitTree(tree) {
+        if (!tree || typeof tree !== 'object') return this.createSplitLeaf();
+        const normalizeNode = (node) => {
+            if (!node || typeof node !== 'object') return this.createSplitLeaf();
+            if (node.kind === 'split') {
+                const orientation = node.orientation === 'vertical' ? 'vertical' : 'horizontal';
+                const rawRatio = Number.isFinite(node.ratio) ? node.ratio : parseFloat(node.ratio);
+                return {
+                    id: node.id || this.generateSplitNodeId('s'),
+                    kind: 'split',
+                    orientation,
+                    ratio: this.clampSplitRatio(Number.isFinite(rawRatio) ? rawRatio : 0.5),
+                    first: normalizeNode(node.first),
+                    second: normalizeNode(node.second),
+                };
+            }
+            const attrs = node.attributes && typeof node.attributes === 'object' ? JSON.parse(JSON.stringify(node.attributes)) : {};
+            attrs.regionType = attrs.regionType || attrs.label || attrs.type || 'Other';
+            if (attrs.regionType === 'Fixture') attrs.regionType = 'Other';
+            attrs.category = attrs.category || '';
+            attrs.aisle = attrs.aisle || '';
+            attrs.side = this.normalizeAisleDirection(attrs.side) || '';
+            attrs.notes = attrs.notes || '';
+            return {
+                id: node.id || this.generateSplitNodeId('r'),
+                kind: 'leaf',
+                attributes: attrs,
+            };
+        };
+        return normalizeNode(tree);
+    }
+
+    clampSplitRatio(ratio) {
+        if (!Number.isFinite(ratio)) return 0.5;
+        return Math.max(0.02, Math.min(0.98, ratio));
+    }
+
+    getSplitRoot(ann) {
+        if (!ann || ann.type !== 'split-bbox') return null;
+        ann.attributes = ann.attributes || {};
+        ann.attributes.splitTree = this.normalizeSplitTree(ann.attributes.splitTree);
+        return ann.attributes.splitTree;
+    }
+
+    getSplitLayout(tree, rect) {
+        const leaves = [];
+        const dividers = [];
+        const walk = (node, r) => {
+            if (!node) return;
+            if (node.kind !== 'split') {
+                leaves.push({ node, rect: r });
+                return;
+            }
+            const ratio = this.clampSplitRatio(node.ratio);
+            if (node.orientation === 'vertical') {
+                const firstW = r.width * ratio;
+                const firstRect = { x: r.x, y: r.y, width: firstW, height: r.height };
+                const secondRect = { x: r.x + firstW, y: r.y, width: r.width - firstW, height: r.height };
+                dividers.push({ node, rect: r, x: r.x + firstW, y: r.y, orientation: 'vertical' });
+                walk(node.first, firstRect);
+                walk(node.second, secondRect);
+            } else {
+                const firstH = r.height * ratio;
+                const firstRect = { x: r.x, y: r.y, width: r.width, height: firstH };
+                const secondRect = { x: r.x, y: r.y + firstH, width: r.width, height: r.height - firstH };
+                dividers.push({ node, rect: r, x: r.x, y: r.y + firstH, orientation: 'horizontal' });
+                walk(node.first, firstRect);
+                walk(node.second, secondRect);
+            }
+        };
+        walk(tree, rect);
+        return { leaves, dividers };
+    }
+
+    findSplitLeaf(tree, regionId) {
+        if (!tree || !regionId) return null;
+        if (tree.kind !== 'split') return tree.id === regionId ? tree : null;
+        return this.findSplitLeaf(tree.first, regionId) || this.findSplitLeaf(tree.second, regionId);
+    }
+
+    findSplitNode(tree, nodeId) {
+        if (!tree || !nodeId) return null;
+        if (tree.id === nodeId) return tree;
+        if (tree.kind !== 'split') return null;
+        return this.findSplitNode(tree.first, nodeId) || this.findSplitNode(tree.second, nodeId);
+    }
+
+    splitLeaf(tree, regionId) {
+        if (!tree || !regionId || tree.kind !== 'split') return false;
+        if (tree.first && tree.first.kind !== 'split' && tree.first.id === regionId) {
+            const attrs = JSON.parse(JSON.stringify(tree.first.attributes || {}));
+            tree.first = this.createSplitNode('horizontal', 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
+            this.selectedSplitRegion = { annotationId: this.selectedAnnotation, regionId: tree.first.first.id };
+            return true;
+        }
+        if (tree.second && tree.second.kind !== 'split' && tree.second.id === regionId) {
+            const attrs = JSON.parse(JSON.stringify(tree.second.attributes || {}));
+            tree.second = this.createSplitNode('horizontal', 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
+            this.selectedSplitRegion = { annotationId: this.selectedAnnotation, regionId: tree.second.first.id };
+            return true;
+        }
+        return this.splitLeaf(tree.first, regionId) || this.splitLeaf(tree.second, regionId);
+    }
+
+    deleteSplitLeaf(tree, regionId) {
+        if (!tree || tree.kind !== 'split') return { changed: false, replacement: tree, selectedLeafId: null };
+        if (tree.first && tree.first.kind !== 'split' && tree.first.id === regionId) {
+            return { changed: true, replacement: tree.second, selectedLeafId: this.getFirstSplitLeafId(tree.second) };
+        }
+        if (tree.second && tree.second.kind !== 'split' && tree.second.id === regionId) {
+            return { changed: true, replacement: tree.first, selectedLeafId: this.getFirstSplitLeafId(tree.first) };
+        }
+        const firstResult = this.deleteSplitLeaf(tree.first, regionId);
+        if (firstResult.changed) {
+            tree.first = firstResult.replacement;
+            return { changed: true, replacement: tree, selectedLeafId: firstResult.selectedLeafId };
+        }
+        const secondResult = this.deleteSplitLeaf(tree.second, regionId);
+        if (secondResult.changed) {
+            tree.second = secondResult.replacement;
+            return { changed: true, replacement: tree, selectedLeafId: secondResult.selectedLeafId };
+        }
+        return { changed: false, replacement: tree, selectedLeafId: null };
+    }
+
+    getFirstSplitLeafId(tree) {
+        if (!tree) return null;
+        if (tree.kind !== 'split') return tree.id;
+        return this.getFirstSplitLeafId(tree.first) || this.getFirstSplitLeafId(tree.second);
+    }
+
+    getSplitRegionTypeOptions() {
+        const options = [];
+        const add = (items) => {
+            for (const item of items || []) {
+                if (item && !options.includes(item)) options.push(item);
+            }
+        };
+        add(this.configuredLabelGroups.fixture || []);
+        add(this.configuredLabelGroups.aisle || []);
+        if (options.length === 0) add(['Shelf', 'Wall Shelf', 'Cooler', 'Checkout-Shelf', 'Endcap', 'Counter', 'Island', 'Aisle', 'Other']);
+        return options;
+    }
+
+    getSplitRegionAttribute(label) {
+        if ((this.configuredLabelGroups.aisle || []).includes(label)) return 'aisle';
+        if ((this.configuredLabelGroups.fixture || []).includes(label)) return 'fixture';
+        return label === 'Aisle' ? 'aisle' : 'fixture';
+    }
+
+    getSplitRegionLabel(leaf) {
+        const attrs = leaf && leaf.attributes ? leaf.attributes : {};
+        const parts = [];
+        if (attrs.regionType) parts.push(attrs.regionType);
+        if (attrs.category) parts.push(attrs.category);
+        const aisle = attrs.aisle || attrs.notes;
+        if (aisle) parts.push(`Aisle ${aisle}`);
+        const side = this.normalizeAisleDirection(attrs.side);
+        if (side) parts.push(side);
+        return parts.join(' · ') || 'Region';
+    }
+
+    selectSplitRegion(annotationId, regionId) {
+        this.selectedAnnotation = annotationId;
+        this.selectedSplitRegion = { annotationId, regionId };
+        this.renderAnnotationBoxes();
+    }
+
+    clearSelectedSplitRegionIfInvalid() {
+        if (!this.selectedSplitRegion) return;
+        const ann = this.annotations.find(a => a.id === this.selectedSplitRegion.annotationId);
+        const leaf = ann ? this.findSplitLeaf(this.getSplitRoot(ann), this.selectedSplitRegion.regionId) : null;
+        if (!leaf) this.selectedSplitRegion = null;
+    }
+
+    createSplitBoxAnnotation(box) {
+        this.pushHistory();
+        const newAnn = {
+            id: this.nextAnnotationId++,
+            type: 'split-bbox',
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+            angle: 0,
+            label: '',
+            attribute: 'fixture',
+            level: this.getLevelForGroup('fixture'),
+            attributes: {
+                splitTree: this.createDefaultSplitTree(box.width, box.height),
+            },
+        };
+        this.annotations.push(newAnn);
+        this.selectedAnnotation = newAnn.id;
+        this.selectedSplitRegion = { annotationId: newAnn.id, regionId: this.getFirstSplitLeafId(newAnn.attributes.splitTree) };
+        this.hasUnsavedChanges = true;
+        this.isSplitBoxDrawMode = false;
+        this.pendingBoxKind = 'bbox';
+        this.canvas.style.cursor = 'grab';
+        if (!this.checkBoundaryConstraint(newAnn)) {
+            console.warn('Annotation extends outside Boundary');
+        }
+        this.renderAnnotationBoxes();
+        this.renderMapLegend();
+    }
+
+    addSplitToSelectedRegion() {
+        if (!this.selectedSplitRegion || this.selectedSplitRegion.annotationId !== this.selectedAnnotation) {
+            alert('请先选择一个 split boundingbox 的子区域。');
+            return;
+        }
+        const ann = this.annotations.find(a => a.id === this.selectedSplitRegion.annotationId);
+        if (!ann || ann.type !== 'split-bbox') return;
+        const tree = this.getSplitRoot(ann);
+        const leaf = this.findSplitLeaf(tree, this.selectedSplitRegion.regionId);
+        if (!leaf) return;
+        this.pushHistory();
+        let changed = false;
+        if (tree.kind !== 'split' && tree.id === leaf.id) {
+            const attrs = JSON.parse(JSON.stringify(tree.attributes || {}));
+            ann.attributes.splitTree = this.createSplitNode('horizontal', 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
+            this.selectedSplitRegion = { annotationId: ann.id, regionId: ann.attributes.splitTree.first.id };
+            changed = true;
+        } else {
+            changed = this.splitLeaf(tree, leaf.id);
+        }
+        if (changed) {
+            this.hasUnsavedChanges = true;
+            this.renderAnnotationBoxes();
+        }
+    }
+
+    deleteSelectedSplitRegion() {
+        if (!this.selectedSplitRegion) return false;
+        const ann = this.annotations.find(a => a.id === this.selectedSplitRegion.annotationId);
+        if (!ann || ann.type !== 'split-bbox') return false;
+        const tree = this.getSplitRoot(ann);
+        const leaf = this.findSplitLeaf(tree, this.selectedSplitRegion.regionId);
+        if (!leaf) return false;
+        if (!confirm(`Delete split region "${this.getSplitRegionLabel(leaf)}"?`)) return true;
+        this.pushHistory();
+        if (tree.kind !== 'split') {
+            this.selectedSplitRegion = null;
+        } else {
+            const result = this.deleteSplitLeaf(tree, leaf.id);
+            if (result.changed) {
+                ann.attributes.splitTree = this.normalizeSplitTree(result.replacement);
+                this.selectedSplitRegion = result.selectedLeafId ? { annotationId: ann.id, regionId: result.selectedLeafId } : null;
+            }
+        }
+        this.hasUnsavedChanges = true;
+        this.renderAnnotationBoxes();
+        this.renderMapLegend();
+        return true;
+    }
+
+    renderSplitRegionsForBox(box, el, widthPx, heightPx) {
+        const root = this.getSplitRoot(box);
+        if (!root) return;
+        const { leaves, dividers } = this.getSplitLayout(root, { x: 0, y: 0, width: widthPx, height: heightPx });
+        const selectedRegionId = this.selectedSplitRegion && this.selectedSplitRegion.annotationId === box.id
+            ? this.selectedSplitRegion.regionId
+            : null;
+
+        const splitTheme = this.getSplitBoxTheme();
+
+        this.attachSplitDividerHitTest(box, el, dividers, widthPx, heightPx);
+
+        for (const leafInfo of leaves) {
+            const leaf = leafInfo.node;
+            const r = leafInfo.rect;
+            const region = document.createElement('div');
+            region.className = 'split-region';
+            if (leaf.id === selectedRegionId) region.classList.add('split-region--selected');
+            region.dataset.regionId = leaf.id;
+            region.style.left = `${r.x}px`;
+            region.style.top = `${r.y}px`;
+            region.style.width = `${r.width}px`;
+            region.style.height = `${r.height}px`;
+            region.title = this.getSplitRegionLabel(leaf);
+
+            if (splitTheme) {
+                region.style.borderColor = splitTheme.pickerBorderColor || splitTheme.borderColor || splitTheme.accentColor;
+                region.style.background = splitTheme.backgroundColor || this.hexToRgba(splitTheme.accentColor, 0.12);
+                region.style.setProperty('--split-region-label-color', splitTheme.accentColor);
+            }
+
+            const text = document.createElement('span');
+            text.className = 'split-region-label';
+            const regionLabel = this.getSplitRegionLabel(leaf);
+            if (splitTheme) {
+                text.style.color = splitTheme.labelTextColor || '#fff';
+            }
+            this.applySplitRegionLabelLayout(text, regionLabel, r.width, r.height);
+            region.appendChild(text);
+
+            region.addEventListener('mousedown', (e) => {
+                this.startAnnotationDrag(box.id, e, {
+                    onClick: () => this.selectSplitRegion(box.id, leaf.id),
+                    onDragStart: () => {
+                        this.selectedAnnotation = box.id;
+                        this.selectedSplitRegion = { annotationId: box.id, regionId: leaf.id };
+                    },
+                });
+            });
+            el.appendChild(region);
+        }
+
+        this.renderSplitDividersForBox(box, el, dividers, widthPx, heightPx);
+    }
+
+    attachSplitDividerHitTest(box, el, dividers, widthPx, heightPx) {
+        // Use 2-D distance from the nearest point on each divider's line segment so that
+        // the correct divider is chosen even when the cursor is near an intersection.
+        const findDividerAt = (clientX, clientY) => {
+            const local = this.getSplitBoxLocalPoint(el, box, clientX, clientY, widthPx, heightPx);
+            const threshold = 3;
+            let best = null;
+            let bestDist = Infinity;
+            for (const divider of dividers) {
+                let dist;
+                if (divider.orientation === 'vertical') {
+                    // Line segment: x = divider.x, y ∈ [rect.y, rect.y + rect.height]
+                    const perpDist = Math.abs(local.x - divider.x);
+                    const offEnd = Math.max(0, divider.rect.y - local.y, local.y - (divider.rect.y + divider.rect.height));
+                    dist = Math.sqrt(perpDist * perpDist + offEnd * offEnd);
+                } else {
+                    // Line segment: y = divider.y, x ∈ [rect.x, rect.x + rect.width]
+                    const perpDist = Math.abs(local.y - divider.y);
+                    const offEnd = Math.max(0, divider.rect.x - local.x, local.x - (divider.rect.x + divider.rect.width));
+                    dist = Math.sqrt(perpDist * perpDist + offEnd * offEnd);
+                }
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = divider;
+                }
+            }
+            return bestDist <= threshold ? best : null;
+        };
+
+        // Build a Map from splitNodeId → divider for O(1) lookup
+        const dividerByNodeId = new Map(dividers.map(d => [d.node.id, d]));
+
+        el.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            // Prefer the divider whose DOM element the cursor is directly on (pixel-perfect).
+            // Fall back to the 2D distance hit test for clicks slightly off the divider line.
+            let divider = null;
+            const targetEl = e.target && e.target.closest ? e.target.closest('.split-divider') : null;
+            if (targetEl && dividerByNodeId.has(targetEl.dataset.splitNodeId)) {
+                divider = dividerByNodeId.get(targetEl.dataset.splitNodeId);
+            } else {
+                divider = findDividerAt(e.clientX, e.clientY);
+            }
+            if (!divider) return;
+            e.preventDefault();
+            // stopImmediatePropagation prevents the box-drag handler (bubble phase, same el)
+            // from also firing, which would move the whole annotation and call renderAnnotationBoxes().
+            e.stopImmediatePropagation();
+            this.startSplitDividerDrag(box, el, divider, widthPx, heightPx, e);
+        }, true);
+
+        el.addEventListener('mousemove', (e) => {
+            // Don't interfere with cursor while a drag is in progress
+            if (document.body.classList.contains('split-divider-dragging')) return;
+            const divider = findDividerAt(e.clientX, e.clientY);
+            el.style.cursor = divider
+                ? (divider.orientation === 'vertical' ? 'col-resize' : 'row-resize')
+                : '';
+        }, true);
+
+        el.addEventListener('mouseleave', () => {
+            if (!document.body.classList.contains('split-divider-dragging')) {
+                el.style.cursor = '';
+            }
+        });
+    }
+
+    // Return the total CSS rotation (radians) of an element, including all ancestor transforms.
+    _getSplitBoxTotalRotation(el) {
+        let totalRad = 0;
+        for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+            const t = window.getComputedStyle(node).transform;
+            if (t && t !== 'none') {
+                const m = new DOMMatrix(t);
+                totalRad += Math.atan2(m.b, m.a);
+            }
+        }
+        return totalRad;
+    }
+
+    getSplitBoxLocalPoint(el, box, clientX, clientY, widthPx, heightPx) {
+        // Use the element's actual bounding-rect center — correct under any CSS transform chain
+        const rect = el.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const dx = clientX - centerX;
+        const dy = clientY - centerY;
+
+        // Accumulate total rotation from all ancestor CSS transforms
+        const totalRad = this._getSplitBoxTotalRotation(el);
+        const cos = Math.cos(totalRad);
+        const sin = Math.sin(totalRad);
+        return {
+            x: widthPx / 2 + dx * cos + dy * sin,
+            y: heightPx / 2 - dx * sin + dy * cos,
+        };
+    }
+
+    renderSplitDividersForBox(box, el, dividers, widthPx, heightPx) {
+        for (const divider of dividers) {
+            const line = document.createElement('div');
+            line.className = `split-divider split-divider--${divider.orientation}`;
+            line.dataset.splitNodeId = divider.node.id;
+            if (divider.orientation === 'vertical') {
+                line.style.left = `${divider.x}px`;
+                line.style.top = `${divider.rect.y}px`;
+                line.style.height = `${divider.rect.height}px`;
+            } else {
+                line.style.left = `${divider.rect.x}px`;
+                line.style.top = `${divider.y}px`;
+                line.style.width = `${divider.rect.width}px`;
+            }
+
+            const tooltip = document.createElement('span');
+            tooltip.className = 'split-divider-tooltip';
+            tooltip.textContent = `${Math.round(divider.node.ratio * 100)}% / ${Math.round((1 - divider.node.ratio) * 100)}%`;
+            line.appendChild(tooltip);
+
+            line.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                this.startSplitDividerDrag(box, el, divider, widthPx, heightPx, e);
+            });
+            el.appendChild(line);
+        }
+    }
+
+    // Lightweight in-place update of split regions/dividers during drag.
+    // Does NOT recreate the outer container – only updates CSS of existing children.
+    updateSplitBoxDOM(ann, containerEl, widthPx, heightPx) {
+        const root = this.getSplitRoot(ann);
+        if (!root) return;
+        const { leaves, dividers } = this.getSplitLayout(root, { x: 0, y: 0, width: widthPx, height: heightPx });
+
+        const regionEls = containerEl.querySelectorAll('.split-region');
+        for (const leafInfo of leaves) {
+            const r = leafInfo.rect;
+            for (const regionEl of regionEls) {
+                if (regionEl.dataset.regionId === leafInfo.node.id) {
+                    regionEl.style.left   = `${r.x}px`;
+                    regionEl.style.top    = `${r.y}px`;
+                    regionEl.style.width  = `${r.width}px`;
+                    regionEl.style.height = `${r.height}px`;
+                    regionEl.title = this.getSplitRegionLabel(leafInfo.node);
+                    const labelEl = regionEl.querySelector('.split-region-label');
+                    if (labelEl) {
+                        this.applySplitRegionLabelLayout(labelEl, this.getSplitRegionLabel(leafInfo.node), r.width, r.height);
+                    }
+                    break;
+                }
+            }
+        }
+
+        const dividerEls = containerEl.querySelectorAll('.split-divider');
+        for (const divider of dividers) {
+            for (const divEl of dividerEls) {
+                if (divEl.dataset.splitNodeId === divider.node.id) {
+                    if (divider.orientation === 'vertical') {
+                        divEl.style.left   = `${divider.x}px`;
+                        divEl.style.top    = `${divider.rect.y}px`;
+                        divEl.style.height = `${divider.rect.height}px`;
+                        divEl.style.width  = '';
+                    } else {
+                        divEl.style.left   = `${divider.rect.x}px`;
+                        divEl.style.top    = `${divider.y}px`;
+                        divEl.style.width  = `${divider.rect.width}px`;
+                        divEl.style.height = '';
+                    }
+                    const tooltip = divEl.querySelector('.split-divider-tooltip');
+                    if (tooltip) {
+                        tooltip.textContent = `${Math.round(divider.node.ratio * 100)}% / ${Math.round((1 - divider.node.ratio) * 100)}%`;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    startSplitDividerDrag(box, el, divider, widthPx, heightPx, startEvent) {
+        const ann = this.annotations.find(a => a.id === box.id);
+        const node = ann ? this.findSplitNode(this.getSplitRoot(ann), divider.node.id) : null;
+        if (!ann || !node) return;
+
+        this.selectedAnnotation = box.id;
+        this.selectedSplitRegion = null;
+        this.pushHistory();
+        document.body.classList.add('split-divider-dragging');
+
+        // ── Cache everything once at drag start ──────────────────────────────
+        const rect = el.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const totalRad = this._getSplitBoxTotalRotation(el);
+        const cos = Math.cos(totalRad);
+        const sin = Math.sin(totalRad);
+        const pr = divider.rect;
+        const isVertical = node.orientation === 'vertical';
+
+        // Pre-cache child DOM elements as Maps to avoid querySelectorAll every frame
+        const regionElMap = new Map();
+        for (const re of el.querySelectorAll('.split-region')) {
+            regionElMap.set(re.dataset.regionId, re);
+        }
+        const dividerElMap = new Map();
+        for (const de of el.querySelectorAll('.split-divider')) {
+            dividerElMap.set(de.dataset.splitNodeId, de);
+        }
+
+        const applyRatio = (clientX, clientY) => {
+            const dx = clientX - centerX;
+            const dy = clientY - centerY;
+            const lx = widthPx / 2 + dx * cos + dy * sin;
+            const ly = heightPx / 2 - dx * sin + dy * cos;
+            node.ratio = this.clampSplitRatio(
+                isVertical ? (lx - pr.x) / Math.max(1, pr.width)
+                           : (ly - pr.y) / Math.max(1, pr.height)
+            );
+            // Use ann.attributes.splitTree directly to avoid getSplitRoot() re-normalizing
+            // the tree on every call (which creates a new copy and makes `node` stale).
+            const { leaves, dividers: allDividers } = this.getSplitLayout(
+                ann.attributes.splitTree, { x: 0, y: 0, width: widthPx, height: heightPx }
+            );
+            for (const leafInfo of leaves) {
+                const re = regionElMap.get(leafInfo.node.id);
+                if (re) {
+                    const r = leafInfo.rect;
+                    re.style.left   = `${r.x}px`;
+                    re.style.top    = `${r.y}px`;
+                    re.style.width  = `${r.width}px`;
+                    re.style.height = `${r.height}px`;
+                    re.title = this.getSplitRegionLabel(leafInfo.node);
+                    const labelEl = re.querySelector('.split-region-label');
+                    if (labelEl) {
+                        this.applySplitRegionLabelLayout(labelEl, this.getSplitRegionLabel(leafInfo.node), r.width, r.height);
+                    }
+                }
+            }
+            for (const d of allDividers) {
+                const de = dividerElMap.get(d.node.id);
+                if (de) {
+                    if (d.orientation === 'vertical') {
+                        de.style.left   = `${d.x}px`;
+                        de.style.top    = `${d.rect.y}px`;
+                        de.style.height = `${d.rect.height}px`;
+                        de.style.width  = '';
+                    } else {
+                        de.style.left   = `${d.rect.x}px`;
+                        de.style.top    = `${d.y}px`;
+                        de.style.width  = `${d.rect.width}px`;
+                        de.style.height = '';
+                    }
+                    const tip = de.querySelector('.split-divider-tooltip');
+                    if (tip) tip.textContent = `${Math.round(d.node.ratio * 100)}% / ${Math.round((1 - d.node.ratio) * 100)}%`;
+                }
+            }
+        };
+
+        const onMouseMove = (me) => {
+            me.preventDefault();
+            applyRatio(me.clientX, me.clientY);
+        };
+        const onMouseUp = (me) => {
+            document.removeEventListener('mousemove', onMouseMove, true);
+            document.removeEventListener('mouseup', onMouseUp, true);
+            document.body.classList.remove('split-divider-dragging');
+            applyRatio(me.clientX, me.clientY); // apply the final position
+            this.hasUnsavedChanges = true;
+            this.renderAnnotationBoxes(); // full rebuild once on release
+        };
+
+        applyRatio(startEvent.clientX, startEvent.clientY); // apply start position immediately
+        document.addEventListener('mousemove', onMouseMove, true);
+        document.addEventListener('mouseup', onMouseUp, true);
     }
 
     applyRotation(angleDeg) {
@@ -4409,6 +5127,7 @@ class StoreLayoutViewer {
             const el = this.createAnnotationBoxElement(previewBox);
             if (el) {
                 el.classList.add('annotation-box--preview');
+                if (this.pendingBoxKind === 'split-bbox') el.classList.add('annotation-box--split-bbox');
                 fragment.appendChild(el);
             }
         }
@@ -4418,6 +5137,7 @@ class StoreLayoutViewer {
             const el = this.createAnnotationBoxElement({ ...this.pendingBox, label: '' });
             if (el) {
                 el.classList.add('annotation-box--preview');
+                if (this.pendingBoxKind === 'split-bbox') el.classList.add('annotation-box--split-bbox');
                 fragment.appendChild(el);
             }
         }
@@ -4429,6 +5149,68 @@ class StoreLayoutViewer {
 
         // Update attributes panel
         this.updateAttributesPanel();
+    }
+
+    startAnnotationDrag(boxId, startEvent, options = {}) {
+        if (!this.annotationMode || boxId === undefined || !startEvent || startEvent.button !== 0) return;
+
+        startEvent.stopPropagation();
+        startEvent.preventDefault();
+
+        const ann = this.annotations.find(a => a.id === boxId);
+        if (!ann) return;
+
+        const { onClick = null, onDragStart = null } = options;
+        const world = this.screenToWorld(startEvent.clientX, startEvent.clientY);
+
+        this.isDraggingAnnotation = false;
+        this.dragAnnotationId = boxId;
+        this.dragAnnotationOffset = { dx: world.x - ann.x, dy: world.y - ann.y };
+        this._dragStartScreen = { x: startEvent.clientX, y: startEvent.clientY };
+        this._dragMoved = false;
+
+        let dragStateApplied = false;
+        const applyDragState = () => {
+            if (dragStateApplied) return;
+            dragStateApplied = true;
+            this.selectedAnnotation = boxId;
+            if (typeof onDragStart === 'function') onDragStart(ann);
+        };
+
+        const onMouseMove = (me) => {
+            const dx = me.clientX - this._dragStartScreen.x;
+            const dy = me.clientY - this._dragStartScreen.y;
+            if (!this._dragMoved && (dx * dx + dy * dy) > 9) {
+                this._dragMoved = true;
+                this.isDraggingAnnotation = true;
+                applyDragState();
+            }
+            if (this._dragMoved) {
+                const w = this.screenToWorld(me.clientX, me.clientY);
+                ann.x = w.x - this.dragAnnotationOffset.dx;
+                ann.y = w.y - this.dragAnnotationOffset.dy;
+                this.renderAnnotationBoxes();
+            }
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+
+            if (!this._dragMoved) {
+                if (typeof onClick === 'function') onClick(ann);
+            } else {
+                this.hasUnsavedChanges = true;
+            }
+
+            this.isDraggingAnnotation = false;
+            this.dragAnnotationId = null;
+            this.dragAnnotationOffset = null;
+            this.renderAnnotationBoxes();
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
     }
 
     createAnnotationBoxElement(box) {
@@ -4455,6 +5237,11 @@ class StoreLayoutViewer {
             el.style.transform = `rotate(${box.angle}deg)`;
         }
 
+        if (box.type === 'split-bbox') {
+            el.classList.add('annotation-box--split-bbox');
+            this.applySplitBoxTheme(el);
+        }
+
         // Attribute-based color class
         if (box.attribute) {
             el.classList.add(`annotation-box--${box.attribute}`);
@@ -4467,10 +5254,15 @@ class StoreLayoutViewer {
             }
         }
 
+        if (box.type === 'split-bbox' && box.id !== undefined) {
+            this.renderSplitRegionsForBox(box, el, w, h);
+        }
+
         const labelEl = document.createElement('div');
         labelEl.className = 'annotation-label';
         // For aisle annotations, show the notes number directly on the bbox
         let labelText = box.label || (box.id !== undefined ? `#${box.id}` : '');
+        if (box.type === 'split-bbox') labelText = '';
         if (box.attribute === 'aisle' && box.attributes) {
             const notes = box.attributes.notes;
             const side = this.normalizeAisleDirection(box.attributes.side);
@@ -4576,50 +5368,12 @@ class StoreLayoutViewer {
         // Drag to move and click to select/deselect
         if (box.id !== undefined && this.annotationMode) {
             el.addEventListener('mousedown', (e) => {
-                if (e.button !== 0) return;
-                e.stopPropagation();
-                e.preventDefault();
-                const world = this.screenToWorld(e.clientX, e.clientY);
-                const ann = this.annotations.find(a => a.id === box.id);
-                if (!ann) return;
-                this.isDraggingAnnotation = false;
-                this.dragAnnotationId = box.id;
-                this.dragAnnotationOffset = { dx: world.x - ann.x, dy: world.y - ann.y };
-                this._dragStartScreen = { x: e.clientX, y: e.clientY };
-                this._dragMoved = false;
-
-                const onMouseMove = (me) => {
-                    const dx = me.clientX - this._dragStartScreen.x;
-                    const dy = me.clientY - this._dragStartScreen.y;
-                    if (!this._dragMoved && (dx * dx + dy * dy) > 9) {
-                        this._dragMoved = true;
-                        this.isDraggingAnnotation = true;
-                        this.selectedAnnotation = box.id;
-                    }
-                    if (this._dragMoved) {
-                        const w = this.screenToWorld(me.clientX, me.clientY);
-                        ann.x = w.x - this.dragAnnotationOffset.dx;
-                        ann.y = w.y - this.dragAnnotationOffset.dy;
-                        this.renderAnnotationBoxes();
-                    }
-                };
-                const onMouseUp = (me) => {
-                    document.removeEventListener('mousemove', onMouseMove);
-                    document.removeEventListener('mouseup', onMouseUp);
-                    if (!this._dragMoved) {
-                        // No drag -> toggle selection
+                this.startAnnotationDrag(box.id, e, {
+                    onClick: () => {
                         this.selectedAnnotation = this.selectedAnnotation === box.id ? null : box.id;
-                    }
-                    this.isDraggingAnnotation = false;
-                    this.dragAnnotationId = null;
-                    this.dragAnnotationOffset = null;
-                    if (this._dragMoved) {
-                        this.hasUnsavedChanges = true;
-                    }
-                    this.renderAnnotationBoxes();
-                };
-                document.addEventListener('mousemove', onMouseMove);
-                document.addEventListener('mouseup', onMouseUp);
+                        this.selectedSplitRegion = null;
+                    },
+                });
             });
 
             // Forward wheel events through the annotation box to the map canvas so
@@ -4705,6 +5459,7 @@ class StoreLayoutViewer {
         if (!confirm(`Delete annotation ${name}?`)) return;
         this.pushHistory();
         if (this.selectedAnnotation === id) this.selectedAnnotation = null;
+        if (this.selectedSplitRegion && this.selectedSplitRegion.annotationId === id) this.selectedSplitRegion = null;
         this.annotations = this.annotations.filter(a => a.id !== id);
         this.hasUnsavedChanges = true;
         this.renderAnnotationBoxes();
@@ -5309,14 +6064,16 @@ class StoreLayoutViewer {
             const hitAnnotation = this.hitTestAnnotation(world.x, world.y);
             if (hitAnnotation === null) {
                 this.selectedAnnotation = null;
+                this.selectedSplitRegion = null;
                 this.renderAnnotationBoxes();
             }
         }
 
         // Annotation mode + Ctrl or box draw mode: start drawing a box
-        if (this.annotationMode && e.button === 0 && (this.isBoxDrawMode || e.ctrlKey || e.metaKey)) {
+        if (this.annotationMode && e.button === 0 && (this.isBoxDrawMode || this.isSplitBoxDrawMode || e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             this.isDrawingBox = true;
+            this.pendingBoxKind = this.isSplitBoxDrawMode ? 'split-bbox' : 'bbox';
             this.drawStartWorld = world;
             this.drawCurrentWorld = world;
             return;
@@ -5391,7 +6148,7 @@ class StoreLayoutViewer {
         const hitCamera = this.hitTestCamera(world.x, world.y);
         if (hitCamera !== this.hoveredCamera) {
             this.hoveredCamera = hitCamera;
-            this.canvas.style.cursor = (this.isBoxDrawMode || this.companionMode) ? 'crosshair' : (hitCamera !== null ? 'pointer' : 'grab');
+            this.canvas.style.cursor = (this.isBoxDrawMode || this.isSplitBoxDrawMode || this.companionMode) ? 'crosshair' : (hitCamera !== null ? 'pointer' : 'grab');
             this.uploadVisibleCameras();
             this.render();
 
@@ -5425,6 +6182,11 @@ class StoreLayoutViewer {
             const minWorldSize = 3 / this.zoom;
             if (width < minWorldSize && height < minWorldSize) {
                 this.renderAnnotationBoxes();
+                return;
+            }
+
+            if (this.pendingBoxKind === 'split-bbox') {
+                this.createSplitBoxAnnotation({ x, y, width, height });
                 return;
             }
 
@@ -5790,10 +6552,35 @@ class StoreLayoutViewer {
             case 'B':
                 if (!this.readOnly && this.annotationMode) {
                     this.isBoxDrawMode = !this.isBoxDrawMode;
-                    if (this.isBoxDrawMode) this.isDrawingPolygon = false;
+                    if (this.isBoxDrawMode) {
+                        this.isDrawingPolygon = false;
+                        this.isSplitBoxDrawMode = false;
+                    }
                     this.canvas.style.cursor = this.isBoxDrawMode ? 'crosshair' : 'grab';
                     const polyBtn = document.getElementById('polygonModeBtn');
                     if (polyBtn) polyBtn.classList.remove('active');
+                }
+                break;
+
+            case 'f':
+            case 'F':
+                if (!this.readOnly && this.annotationMode) {
+                    this.isSplitBoxDrawMode = !this.isSplitBoxDrawMode;
+                    if (this.isSplitBoxDrawMode) {
+                        this.isBoxDrawMode = false;
+                        this.isDrawingPolygon = false;
+                    }
+                    this.pendingBoxKind = this.isSplitBoxDrawMode ? 'split-bbox' : 'bbox';
+                    this.canvas.style.cursor = this.isSplitBoxDrawMode ? 'crosshair' : 'grab';
+                    const polyBtn = document.getElementById('polygonModeBtn');
+                    if (polyBtn) polyBtn.classList.remove('active');
+                }
+                break;
+
+            case 'a':
+            case 'A':
+                if (!this.readOnly && this.annotationMode) {
+                    this.addSplitToSelectedRegion();
                 }
                 break;
 
@@ -5834,6 +6621,7 @@ class StoreLayoutViewer {
                 this.deselectCamera();
                 if (!this.readOnly && this.selectedAnnotation !== null) {
                     this.selectedAnnotation = null;
+                    this.selectedSplitRegion = null;
                     this.renderAnnotationBoxes();
                 }
                 break;
@@ -5852,6 +6640,7 @@ class StoreLayoutViewer {
             case 'x':
             case 'X':
                 if (!this.readOnly && this.annotationMode && this.selectedAnnotation !== null) {
+                    if (this.deleteSelectedSplitRegion()) break;
                     this.deleteAnnotation(this.selectedAnnotation);
                 }
                 break;
@@ -5997,6 +6786,7 @@ class StoreLayoutViewer {
         if (this.selectedAnnotation !== null && !this.annotations.find(a => a.id === this.selectedAnnotation)) {
             this.selectedAnnotation = null;
         }
+        this.clearSelectedSplitRegionIfInvalid();
         this.hasUnsavedChanges = true;
         this.updateUndoRedoButtons();
         this.renderAnnotationBoxes();
@@ -6008,6 +6798,7 @@ class StoreLayoutViewer {
         this.historyIndex++;
         this.annotations = JSON.parse(JSON.stringify(this.historyStack[this.historyIndex]));
         this.nextAnnotationId = this.annotations.reduce((max, a) => Math.max(max, (a.id || 0) + 1), this.nextAnnotationId);
+        this.clearSelectedSplitRegionIfInvalid();
         this.hasUnsavedChanges = true;
         this.updateUndoRedoButtons();
         this.renderAnnotationBoxes();
@@ -6030,6 +6821,7 @@ class StoreLayoutViewer {
         const btn = document.getElementById('polygonModeBtn');
         if (this.isDrawingPolygon) {
             this.isBoxDrawMode = false;
+            this.isSplitBoxDrawMode = false;
             this.polygonCurrentVertices = [];
             this.polygonMouseWorld = null;
             this.canvas.style.cursor = 'crosshair';
@@ -6369,6 +7161,7 @@ class StoreLayoutViewer {
         if (this.selectedAnnotation === null) {
             panel.style.display = 'none';
             delete panel.dataset.annotationId;
+            delete panel.dataset.splitRegionId;
             return;
         }
 
@@ -6376,18 +7169,29 @@ class StoreLayoutViewer {
         if (!ann || !this.annotationMode) {
             panel.style.display = 'none';
             delete panel.dataset.annotationId;
+            delete panel.dataset.splitRegionId;
             return;
+        }
+
+        let splitLeaf = null;
+        if (this.selectedSplitRegion && this.selectedSplitRegion.annotationId === ann.id && ann.type === 'split-bbox') {
+            splitLeaf = this.findSplitLeaf(this.getSplitRoot(ann), this.selectedSplitRegion.regionId);
+            if (!splitLeaf) this.selectedSplitRegion = null;
         }
 
         // If the user is interacting with an input/select inside the panel,
         // skip rebuilding — re-render triggered by map pan/zoom would destroy
         // the focused element and close any open native dropdowns.
         const renderedAnnotationId = Number.parseInt(panel.dataset.annotationId || '', 10);
+        const renderedSplitRegionId = panel.dataset.splitRegionId || '';
         const isSameAnnotation = renderedAnnotationId === ann.id;
-        if (panel.matches(':focus-within') && isSameAnnotation) return;
+        const isSameSplitRegion = (splitLeaf ? splitLeaf.id : '') === renderedSplitRegionId;
+        if (panel.matches(':focus-within') && isSameAnnotation && isSameSplitRegion) return;
 
         panel.style.display = '';
         panel.dataset.annotationId = String(ann.id);
+        if (splitLeaf) panel.dataset.splitRegionId = splitLeaf.id;
+        else delete panel.dataset.splitRegionId;
         content.innerHTML = '';
 
         // Label header badge
@@ -6398,8 +7202,31 @@ class StoreLayoutViewer {
             badge.style.background = theme.accentColor;
             badge.style.color = theme.labelTextColor || '#fff';
         }
-        badge.textContent = ann.label || `#${ann.id}`;
+        badge.textContent = splitLeaf ? `${this.getSplitRegionLabel(splitLeaf)}` : (ann.label || `#${ann.id}`);
         content.appendChild(badge);
+
+        if (splitLeaf) {
+            const attrs = splitLeaf.attributes || (splitLeaf.attributes = {});
+            content.appendChild(this.buildAttrSelect('regionType', 'Label / Type', this.getSplitRegionTypeOptions(), attrs, ann, () => this.renderAnnotationBoxes()));
+            const categoryLabels = this.getCategoryLabels();
+            if (categoryLabels.length > 0) {
+                content.appendChild(this.buildAttrSelect('category', 'Category', categoryLabels, attrs, ann, () => this.renderAnnotationBoxes()));
+            }
+            content.appendChild(this.buildAttrInput('aisle', 'Aisle ', 'aisle', attrs, ann, () => this.renderAnnotationBoxes()));
+            content.appendChild(this.buildAttrSelect(
+                'side',
+                'Direction',
+                this.getAisleDirectionOptions(),
+                attrs,
+                ann,
+                (value) => {
+                    attrs.side = this.normalizeAisleDirection(value);
+                    this.renderAnnotationBoxes();
+                }
+            ));
+            content.appendChild(this.buildAttrInput('notes', 'Notes', 'text', attrs, ann, () => this.renderAnnotationBoxes()));
+            return;
+        }
 
         const attrs = ann.attributes || (ann.attributes = {});
 
@@ -6449,7 +7276,7 @@ class StoreLayoutViewer {
         inp.value = attrs[key] != null ? attrs[key] : '';
         if (inputType === 'number') { inp.min = '0'; inp.step = '1'; inp.style.width = '60px'; }
         if (inputType === 'aisle') {
-            inp.placeholder = '数字或字母 A-Z';
+            inp.placeholder = '数字/字母';
             inp.style.width = '80px';
             inp.style.textTransform = 'uppercase';
             inp.addEventListener('input', () => { inp.value = inp.value.toUpperCase().replace(/[^0-9A-Z]/g, ''); });

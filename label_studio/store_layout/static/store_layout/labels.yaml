@@ -8,7 +8,7 @@ labels:
     - Boundary
 
   inner-structure:
-    - inner-wall
+    - Inner-Wall
 
   fixture:
     - Entrance
@@ -16,7 +16,9 @@ labels:
     - Entrance/Exit
     - Checkout
     - Shelf
-    - Wall shelf
+    - Wall Shelf
+    - Checkout-Shelf
+    - Refrigerator
     - Endcap
     - Counter
     - Island
