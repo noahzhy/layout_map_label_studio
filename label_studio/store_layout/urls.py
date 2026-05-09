@@ -7,6 +7,7 @@ app_name = 'store_layout'
 urlpatterns = [
     # Project list (root)
     path('store_layout/', views.index, name='index'),
+    path('store_layout/help/translation-table/', views.translation_table, name='translation-table'),
     # Project detail: stores within a project  (must be before <str:store_id>/)
     path('store_layout/projects/<int:pk>/', views.project_detail, name='project-detail'),
     # Task assignment management (admin only)

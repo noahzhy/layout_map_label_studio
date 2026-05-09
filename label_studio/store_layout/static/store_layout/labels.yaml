@@ -41,27 +41,8 @@ labels:
     - Meat Area
 
   category:
-    - Beverages
-    - Snacks
-    - Coffee & Tea
-    - Household
-    - Personal Care
-    - Health & Beauty
-    - Frozen Foods
-    - Bakery
-    - Deli
-    - Produce
-    - Meat & Seafood
-    - Dairy & Eggs
-    - Shave Care
-    - Family Care
-    - Fabric Care
-    - Oral Care
-    - Feminine Care
-    - Home Care
-    - Baby Care
-    - Skin Care
-    - Hair Care
+    - No Longer Supported
+    - Call Staff
 
 label_metadata:
   boundary:

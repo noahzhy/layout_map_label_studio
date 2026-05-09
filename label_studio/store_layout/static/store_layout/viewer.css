@@ -1131,6 +1131,31 @@ input[type="checkbox"]:focus-visible {
     font-weight: 600;
 }
 
+.attr-field-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.attr-help-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: rgba(41, 128, 185, 0.14);
+    color: #2980b9;
+    text-decoration: none;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.attr-help-link:hover {
+    background: rgba(41, 128, 185, 0.24);
+}
+
 .attr-field input:not([type="checkbox"]),
 .attr-field select {
     padding: 3px 6px;

@@ -160,6 +160,12 @@ def viewer_page(request, store_id):
     })
 
 
+@login_required
+def translation_table(request):
+    """Render the sub-category translation reference page."""
+    return render(request, 'store_layout/translation_table.html')
+
+
 # ── Save data ────────────────────────────────────────────────────────────────
 
 @csrf_exempt

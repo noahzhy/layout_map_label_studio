@@ -202,6 +202,7 @@
         window.LAYOUT_SAVE_BASE_URL = '/store_layout/{{ store_id }}';
         window.LAYOUT_LABELS_YAML_URL = '/static/store_layout/labels.yaml';
         window.LAYOUT_BUSINESS_L1_L2_YAML_URL = '/static/store_layout/business_l1_l2.yaml';
+        window.LAYOUT_TRANSLATION_TABLE_URL = '{% url "store_layout:translation-table" %}';
 
         {% if task %}
         // Mark-done handler

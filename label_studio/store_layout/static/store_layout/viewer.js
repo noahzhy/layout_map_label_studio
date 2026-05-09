@@ -3863,6 +3863,12 @@ class StoreLayoutViewer {
         return this.normalizeSubcategoryValues(value).join(', ');
     }
 
+    getTranslationTableUrl() {
+        return typeof window !== 'undefined' && typeof window.LAYOUT_TRANSLATION_TABLE_URL === 'string'
+            ? window.LAYOUT_TRANSLATION_TABLE_URL
+            : '';
+    }
+
     annotationSupportsBusinessCategory(ann) {
         if (!ann || !ann.attribute) return false;
         return ['fixture', 'aisle', 'area', 'category'].includes(ann.attribute);
@@ -7543,17 +7549,43 @@ class StoreLayoutViewer {
             subcategoryOptions,
             attrs,
             ann,
-            handleAfterChange
+            handleAfterChange,
+            {
+                helpUrl: this.getTranslationTableUrl(),
+                helpTitle: '打开 Sub-category 中文翻译对照表',
+            }
         );
         content.appendChild(subcategoryField);
         return true;
     }
 
+    buildAttrFieldLabel(labelText, labelOptions = {}) {
+        const lbl = document.createElement('label');
+        lbl.className = 'attr-field-label';
+
+        const text = document.createElement('span');
+        text.textContent = labelText;
+        lbl.appendChild(text);
+
+        if (labelOptions.helpUrl) {
+            const helpLink = document.createElement('a');
+            helpLink.className = 'attr-help-link';
+            helpLink.href = labelOptions.helpUrl;
+            helpLink.target = '_blank';
+            helpLink.rel = 'noopener noreferrer';
+            helpLink.title = labelOptions.helpTitle || '打开帮助';
+            helpLink.textContent = '?';
+            helpLink.addEventListener('click', (event) => event.stopPropagation());
+            lbl.appendChild(helpLink);
+        }
+
+        return lbl;
+    }
+
     buildAttrInput(key, labelText, inputType, attrs, ann, onAfterChange) {
         const field = document.createElement('div');
         field.className = 'attr-field';
-        const lbl = document.createElement('label');
-        lbl.textContent = labelText;
+        const lbl = this.buildAttrFieldLabel(labelText);
         const inp = document.createElement('input');
         inp.type = inputType === 'aisle' ? 'text' : inputType;
         inp.value = attrs[key] != null ? attrs[key] : '';
@@ -7636,12 +7668,11 @@ class StoreLayoutViewer {
         field.dataset.attrLastValue = JSON.stringify(normalizedSelected);
     }
 
-    buildAttrMultiSelect(key, labelText, options, attrs, ann, onAfterChange) {
+    buildAttrMultiSelect(key, labelText, options, attrs, ann, onAfterChange, labelOptions = {}) {
         const field = document.createElement('div');
         field.className = 'attr-field attr-field--multiselect';
 
-        const lbl = document.createElement('label');
-        lbl.textContent = labelText;
+        const lbl = this.buildAttrFieldLabel(labelText, labelOptions);
         field.appendChild(lbl);
 
         const list = document.createElement('div');
@@ -7655,8 +7686,7 @@ class StoreLayoutViewer {
     buildAttrSelect(key, labelText, options, attrs, ann, onAfterChange) {
         const field = document.createElement('div');
         field.className = 'attr-field';
-        const lbl = document.createElement('label');
-        lbl.textContent = labelText;
+        const lbl = this.buildAttrFieldLabel(labelText);
         const sel = document.createElement('select');
         this.populateSelectOptions(sel, options, attrs[key] != null ? attrs[key] : '');
         const handleSelectValueChange = () => {
