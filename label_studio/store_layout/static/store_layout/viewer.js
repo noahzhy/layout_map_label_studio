@@ -3846,6 +3846,23 @@ class StoreLayoutViewer {
             : [];
     }
 
+    normalizeSubcategoryValues(value) {
+        if (Array.isArray(value)) {
+            return [...new Set(value
+                .map(item => typeof item === 'string' ? item.trim() : '')
+                .filter(Boolean))];
+        }
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            return trimmed ? [trimmed] : [];
+        }
+        return [];
+    }
+
+    getSubcategoryDisplayText(value) {
+        return this.normalizeSubcategoryValues(value).join(', ');
+    }
+
     annotationSupportsBusinessCategory(ann) {
         if (!ann || !ann.attribute) return false;
         return ['fixture', 'aisle', 'area', 'category'].includes(ann.attribute);
@@ -4484,7 +4501,7 @@ class StoreLayoutViewer {
             attributes: {
                 regionType: rawType === 'Fixture' ? 'Other' : rawType,
                 category: attrs.category || '',
-                subcategory: attrs.subcategory || '',
+                subcategory: this.normalizeSubcategoryValues(attrs.subcategory),
                 aisle: attrs.aisle || '',
                 side: this.normalizeAisleDirection(attrs.side) || '',
                 notes: attrs.notes || '',
@@ -4543,7 +4560,7 @@ class StoreLayoutViewer {
             attrs.regionType = attrs.regionType || attrs.label || attrs.type || 'Other';
             if (attrs.regionType === 'Fixture') attrs.regionType = 'Other';
             attrs.category = attrs.category || '';
-            attrs.subcategory = attrs.subcategory || '';
+            attrs.subcategory = this.normalizeSubcategoryValues(attrs.subcategory);
             attrs.aisle = attrs.aisle || '';
             attrs.side = this.normalizeAisleDirection(attrs.side) || '';
             attrs.notes = attrs.notes || '';
@@ -4679,7 +4696,8 @@ class StoreLayoutViewer {
         const parts = [];
         if (attrs.regionType) parts.push(attrs.regionType);
         if (attrs.category) parts.push(attrs.category);
-        if (attrs.subcategory) parts.push(attrs.subcategory);
+        const subcategoryText = this.getSubcategoryDisplayText(attrs.subcategory);
+        if (subcategoryText) parts.push(subcategoryText);
         const aisle = attrs.aisle || attrs.notes;
         if (aisle) parts.push(`Aisle ${aisle}`);
         const side = this.normalizeAisleDirection(attrs.side);
@@ -7381,6 +7399,7 @@ class StoreLayoutViewer {
         }
 
         const attrs = ann.attributes || (ann.attributes = {});
+        attrs.subcategory = this.normalizeSubcategoryValues(attrs.subcategory);
 
         // Store-specific Category / Sub-category dropdowns for classifiable annotations.
         if (this.annotationSupportsBusinessCategory(ann)) {
@@ -7498,18 +7517,27 @@ class StoreLayoutViewer {
             ann,
             (value) => {
                 const subcategoryOptions = this.getBusinessSubcategoryOptions(value);
-                if (attrs.subcategory && !subcategoryOptions.includes(attrs.subcategory)) {
-                    attrs.subcategory = '';
+                const selectedSubcategories = this.normalizeSubcategoryValues(attrs.subcategory)
+                    .filter(item => subcategoryOptions.includes(item));
+                attrs.subcategory = selectedSubcategories;
+                if (subcategoryField) {
+                    this.populateMultiSelectOptions(
+                        subcategoryField,
+                        subcategoryOptions,
+                        selectedSubcategories,
+                        attrs,
+                        'subcategory',
+                        ann,
+                        handleAfterChange
+                    );
                 }
-                const subcategorySelect = subcategoryField ? subcategoryField.querySelector('select') : null;
-                this.populateSelectOptions(subcategorySelect, subcategoryOptions, attrs.subcategory || '');
                 handleAfterChange(value);
             }
         );
         content.appendChild(categoryField);
 
         const subcategoryOptions = this.getBusinessSubcategoryOptions(attrs.category);
-        subcategoryField = this.buildAttrSelect(
+        subcategoryField = this.buildAttrMultiSelect(
             'subcategory',
             'Sub-category',
             subcategoryOptions,
@@ -7551,6 +7579,77 @@ class StoreLayoutViewer {
         const row = document.createElement('div');
         row.className = ['attr-row', ...classNames.filter(Boolean)].join(' ');
         return row;
+    }
+
+    populateMultiSelectOptions(field, options, selectedValues, attrs, key, ann, onAfterChange) {
+        if (!field) return;
+        const list = field.querySelector('.attr-multiselect-options');
+        if (!list) return;
+
+        const normalizedSelected = this.normalizeSubcategoryValues(selectedValues);
+        const values = Array.isArray(options) ? [...options] : [];
+        for (const item of normalizedSelected) {
+            if (!values.includes(item)) values.unshift(item);
+        }
+
+        list.textContent = '';
+
+        if (values.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'attr-multiselect-empty';
+            empty.textContent = '—';
+            list.appendChild(empty);
+            field.dataset.attrLastValue = JSON.stringify([]);
+            return;
+        }
+
+        for (const opt of values) {
+            const item = document.createElement('label');
+            item.className = 'attr-multiselect-option';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = opt;
+            checkbox.checked = normalizedSelected.includes(opt);
+
+            const text = document.createElement('span');
+            text.textContent = opt;
+
+            checkbox.addEventListener('change', () => {
+                const nextValues = Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))
+                    .map(input => input.value);
+                const nextSerialized = JSON.stringify(nextValues);
+                const lastSerialized = field.dataset.attrLastValue || '[]';
+                if (nextSerialized === lastSerialized) return;
+                this.pushHistory();
+                attrs[key] = nextValues;
+                field.dataset.attrLastValue = nextSerialized;
+                this.hasUnsavedChanges = true;
+                if (onAfterChange) onAfterChange(nextValues);
+            });
+
+            item.appendChild(checkbox);
+            item.appendChild(text);
+            list.appendChild(item);
+        }
+
+        field.dataset.attrLastValue = JSON.stringify(normalizedSelected);
+    }
+
+    buildAttrMultiSelect(key, labelText, options, attrs, ann, onAfterChange) {
+        const field = document.createElement('div');
+        field.className = 'attr-field attr-field--multiselect';
+
+        const lbl = document.createElement('label');
+        lbl.textContent = labelText;
+        field.appendChild(lbl);
+
+        const list = document.createElement('div');
+        list.className = 'attr-multiselect-options';
+        field.appendChild(list);
+
+        this.populateMultiSelectOptions(field, options, attrs[key], attrs, key, ann, onAfterChange);
+        return field;
     }
 
     buildAttrSelect(key, labelText, options, attrs, ann, onAfterChange) {

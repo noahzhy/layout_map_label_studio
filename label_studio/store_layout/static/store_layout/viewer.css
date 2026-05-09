@@ -1131,7 +1131,7 @@ input[type="checkbox"]:focus-visible {
     font-weight: 600;
 }
 
-.attr-field input,
+.attr-field input:not([type="checkbox"]),
 .attr-field select {
     padding: 3px 6px;
     font-size: 12px;
@@ -1142,7 +1142,43 @@ input[type="checkbox"]:focus-visible {
     width: 100%;
 }
 
-.attr-field input:focus,
+.attr-field--multiselect {
+    min-width: 120px;
+}
+
+.attr-multiselect-options {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 112px;
+    overflow-y: auto;
+    padding: 6px;
+    font-size: 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: var(--bg-page);
+}
+
+.attr-multiselect-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.attr-multiselect-option input[type="checkbox"] {
+    flex-shrink: 0;
+}
+
+.attr-multiselect-empty {
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.attr-field input:not([type="checkbox"]):focus,
 .attr-field select:focus {
     outline: none;
     border-color: var(--accent);
