@@ -1122,7 +1122,7 @@ input[type="checkbox"]:focus-visible {
     display: flex;
     flex-direction: column;
     gap: 3px;
-    min-width: 90px;
+    min-width: 60px;
 }
 
 .attr-field label {
@@ -1175,7 +1175,7 @@ input[type="checkbox"]:focus-visible {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-height: 112px;
+    max-height: 260px;
     overflow-y: auto;
     padding: 6px;
     font-size: 12px;

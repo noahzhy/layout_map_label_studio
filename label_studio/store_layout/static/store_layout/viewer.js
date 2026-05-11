@@ -1,5 +1,5 @@
 /**
- * Interactive Store Layout Labeling
+ * Interactive Store Layout Map
  *
  * WebGL2 map renderer with split-pane image viewer, compass, timeline scrubber,
  * and dynamic camera density based on zoom level.
@@ -614,7 +614,7 @@ class StoreLayoutViewer {
         this.syncRotationSlider();
 
         const storeName = this.metadata.storeName ? String(this.metadata.storeName).trim() : '';
-        document.title = storeName ? `${storeName} - Store Layout Labeling` : 'Store Layout Labeling';
+        document.title = storeName ? `${storeName} - Store Layout Map` : 'Store Layout Map';
 
         const compassDirLabel = document.getElementById('compassDirLabel');
         if (compassDirLabel) {
@@ -4547,6 +4547,53 @@ class StoreLayoutViewer {
         return this.createSplitNode('horizontal', 1 / 10, leftOrTop, middleAndBottom);
     }
 
+    canUpgradeBBoxToSplitBox(ann) {
+        return !!ann
+            && ann.type === 'bbox'
+            && ann.attribute === 'fixture';
+    }
+
+    getBBoxSplitLeafAttributes(ann) {
+        const attrs = ann && ann.attributes && typeof ann.attributes === 'object'
+            ? ann.attributes
+            : {};
+        return {
+            regionType: ann && ann.label ? ann.label : (attrs.regionType || 'Other'),
+            category: attrs.category || '',
+            subcategory: this.normalizeSubcategoryValues(attrs.subcategory),
+            aisle: attrs.aisle || '',
+            side: attrs.side || '',
+            notes: attrs.notes || '',
+        };
+    }
+
+    createTwoLeafSplitTree(baseAttrs = {}, orientation = 'horizontal', ratio = 0.5) {
+        const splitOrientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
+        const firstLeafAttrs = JSON.parse(JSON.stringify(baseAttrs || {}));
+        const secondLeafAttrs = JSON.parse(JSON.stringify(baseAttrs || {}));
+        return this.createSplitNode(
+            splitOrientation,
+            this.clampSplitRatio(ratio),
+            this.createSplitLeaf(firstLeafAttrs),
+            this.createSplitLeaf(secondLeafAttrs)
+        );
+    }
+
+    upgradeBBoxToSplitBox(ann, orientation = 'horizontal') {
+        if (!this.canUpgradeBBoxToSplitBox(ann)) return false;
+        const baseAttrs = this.getBBoxSplitLeafAttributes(ann);
+        const splitTree = this.createTwoLeafSplitTree(baseAttrs, orientation, 0.5);
+        ann.type = 'split-bbox';
+        ann.attributes = ann.attributes && typeof ann.attributes === 'object' ? ann.attributes : {};
+        ann.attributes.splitTree = splitTree;
+        this.selectedAnnotation = ann.id;
+        this.selectedSplitRegion = {
+            annotationId: ann.id,
+            regionId: this.getFirstSplitLeafId(splitTree),
+        };
+        return true;
+    }
+
     normalizeSplitTree(tree) {
         if (!tree || typeof tree !== 'object') return this.createSplitLeaf();
         const normalizeNode = (node) => {
@@ -4757,8 +4804,21 @@ class StoreLayoutViewer {
 
     addSplitToSelectedRegion(orientation = 'horizontal') {
         const splitOrientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
+        const selectedAnn = this.annotations.find(a => a.id === this.selectedAnnotation);
+
+        if (this.canUpgradeBBoxToSplitBox(selectedAnn)) {
+            this.pushHistory();
+            const upgraded = this.upgradeBBoxToSplitBox(selectedAnn, splitOrientation);
+            if (upgraded) {
+                this.hasUnsavedChanges = true;
+                this.renderAnnotationBoxes();
+                this.renderMapLegend();
+            }
+            return;
+        }
+
         if (!this.selectedSplitRegion || this.selectedSplitRegion.annotationId !== this.selectedAnnotation) {
-            alert('请先选择一个 split boundingbox 的子区域。');
+            alert('请先选择一个 split boundingbox 的子区域，或选中一个 fixture bbox 后再按 A / D。');
             return;
         }
         const ann = this.annotations.find(a => a.id === this.selectedSplitRegion.annotationId);
