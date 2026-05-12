@@ -166,6 +166,74 @@ def translation_table(request):
     return render(request, 'store_layout/translation_table.html')
 
 
+@login_required
+def store_assets(request, store_id):
+    """Return store asset metadata for the viewer UI.
+
+    CSV outputs are expected under ``<store>/assets/``.
+    """
+    if not re.match(r'^[\w\-]+$', store_id):
+        return HttpResponse('Invalid store ID', status=400)
+
+    store_path = os.path.join(LAYOUT_DATA_DIR, store_id)
+    if not os.path.isdir(store_path):
+        return HttpResponse('Store not found', status=404)
+
+    if not _is_admin(request.user):
+        if not LayoutTask.objects.filter(store_id=store_id, assigned_to=request.user).exists():
+            return HttpResponseForbidden('Not assigned to this store.')
+
+    assets_path = os.path.join(store_path, 'assets')
+    files = []
+    directories = []
+    csv_files = []
+
+    try:
+        for entry in os.scandir(store_path):
+            if entry.is_dir(follow_symlinks=False):
+                directories.append(entry.name)
+
+        if os.path.isdir(assets_path):
+            for entry in os.scandir(assets_path):
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+
+                stat = entry.stat()
+                name = entry.name
+                lower_name = name.lower()
+                ext = os.path.splitext(lower_name)[1]
+                files.append({
+                    'name': name,
+                    'relative_path': f'assets/{name}',
+                    'size': stat.st_size,
+                    'mtime': int(stat.st_mtime * 1000),
+                    'extension': ext,
+                })
+                if lower_name.endswith('.csv'):
+                    csv_files.append(name)
+    except OSError as exc:
+        logger.error('Failed to list store assets for %s: %s', store_id, exc)
+        return JsonResponse({'status': 'error', 'message': 'Failed to read store assets.'}, status=500)
+
+    files.sort(key=lambda item: item['name'])
+    directories.sort()
+    csv_files.sort()
+
+    response = JsonResponse({
+        'status': 'ok',
+        'store_id': store_id,
+        'asset_base_url': f'/store_layout/{store_id}/assets/',
+        'asset_directory_exists': os.path.isdir(assets_path),
+        'files': files,
+        'directories': directories,
+        'csv_files': csv_files,
+        'has_csv': bool(csv_files),
+        'unique_csv': csv_files[0] if len(csv_files) == 1 else None,
+    })
+    response['Cache-Control'] = 'no-cache, must-revalidate'
+    return response
+
+
 # ── Save data ────────────────────────────────────────────────────────────────
 
 @csrf_exempt

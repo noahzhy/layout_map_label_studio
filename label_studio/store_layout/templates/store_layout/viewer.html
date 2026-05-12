@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Store Layout Map</title>
-    <link rel="stylesheet" href="/static/store_layout/viewer.css">
+    <link rel="stylesheet" href="/static/store_layout/viewer.css?v=3">
 </head>
 <body>
     <div id="app">
@@ -102,6 +102,25 @@
                     <span class="camera-name" id="cameraName">No camera selected</span>
                     <button id="deleteCompanionBtn" class="delete-companion-btn" style="display:none" title="Delete this companion">✕</button>
                     <button id="nextBtn">&rarr;</button>
+                </div>
+                <div id="imageCsvBar">
+                    <div id="imageCsvStatus" class="image-csv-status"></div>
+                    <div id="imageCsvCards" class="image-csv-cards">
+                        <article class="image-csv-card image-csv-card-left">
+                            <div class="image-csv-card-heading">
+                                <span class="image-csv-card-title">ML: Left Shelf</span>
+                            </div>
+                            <div class="image-csv-card-row"><span class="image-csv-card-label">Category:</span> <span id="imageCsvLeftCategory">-</span></div>
+                            <div class="image-csv-card-row"><span class="image-csv-card-label">Sub-Category:</span> <span id="imageCsvLeftSubCategory">-</span></div>
+                        </article>
+                        <article class="image-csv-card image-csv-card-right">
+                            <div class="image-csv-card-heading">
+                                <span class="image-csv-card-title">ML: Right Shelf</span>
+                            </div>
+                            <div class="image-csv-card-row"><span class="image-csv-card-label">Category:</span> <span id="imageCsvRightCategory">-</span></div>
+                            <div class="image-csv-card-row"><span class="image-csv-card-label">Sub-Category:</span> <span id="imageCsvRightSubCategory">-</span></div>
+                        </article>
+                    </div>
                 </div>
                 <div id="imageRecogBar"></div>
                 <div id="imageContainer">
@@ -201,6 +220,7 @@
         // Configuration injected by Django template
         window.LAYOUT_DATA_BASE_URL = '{{ data_base_url }}';
         window.LAYOUT_SAVE_BASE_URL = '/store_layout/{{ store_id }}';
+        window.LAYOUT_ASSETS_URL = '/store_layout/{{ store_id }}/assets-metadata';
         window.LAYOUT_LABELS_YAML_URL = '/static/store_layout/labels.yaml';
         window.LAYOUT_BUSINESS_L1_L2_YAML_URL = '/static/store_layout/business_l1_l2.yaml';
         window.LAYOUT_TRANSLATION_TABLE_URL = '{% url "store_layout:translation-table" %}';
@@ -247,6 +267,6 @@
         });
         {% endif %}
     </script>
-    <script src="/static/store_layout/viewer.js?v=2"></script>
+    <script src="/static/store_layout/viewer.js?v=3"></script>
 </body>
 </html>

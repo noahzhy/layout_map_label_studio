@@ -221,12 +221,22 @@ class StoreLayoutViewer {
         // Path configuration (for Label Studio integration)
         this.dataBaseUrl = options.dataBaseUrl || './';
         this.saveBaseUrl = options.saveBaseUrl || '';
+        this.assetsUrl = options.assetsUrl || (this.saveBaseUrl ? `${this.saveBaseUrl}/assets` : '');
         this.labelsYamlUrl = options.labelsYamlUrl || 'labels.yaml';
         this.businessCategoryYamlUrl = options.businessCategoryYamlUrl || 'business_l1_l2.yaml';
 
         // Per-image recognition/taxonomy data (from recognize_task.py)
         this.recogData = {};
         this.showRecogDetails = false;
+
+        // Optional CSV metadata/results matched by image stem
+        this.storeAssetMeta = null;
+        this.storeAssetBaseUrl = '';
+        this.csvFiles = [];
+        this.activeCsvFile = null;
+        this.csvRowIndex = new Map();
+        this.csvLoadState = 'idle';
+        this.csvStatusMessage = '';
 
         // Debug: OpenMVG match pairs
         this.matchPairs = [];
@@ -363,6 +373,7 @@ class StoreLayoutViewer {
         this.setupEventListeners();
         this.loadLabelsConfig();
         this.loadBusinessCategoryConfig();
+        this.loadStoreCsvData();
         this.resize();
         this.render();
         this.tryAutoLoad();
@@ -531,6 +542,258 @@ class StoreLayoutViewer {
         } catch (e) {
             // No detections available
         }
+    }
+
+    getImageStem(name) {
+        if (!name) return '';
+        const fileName = String(name).split('/').pop().split('?')[0].split('#')[0];
+        return fileName.replace(/\.[^.]+$/, '');
+    }
+
+    setCsvState(state, message = '') {
+        this.csvLoadState = state;
+        this.csvStatusMessage = message;
+    }
+
+    async loadStoreCsvData() {
+        if (!this.assetsUrl) {
+            this.setCsvState('no-csv');
+            this.updateImageCsvBar(this.selectedCamera !== null ? this.getCameraById(this.selectedCamera) : null);
+            return;
+        }
+
+        this.setCsvState('loading', 'Loading CSV information…');
+        this.updateImageCsvBar(this.selectedCamera !== null ? this.getCameraById(this.selectedCamera) : null);
+
+        try {
+            const resp = await fetch(this.assetsUrl, { cache: 'no-cache' });
+            if (!resp.ok) {
+                throw new Error(`Failed to load assets metadata: ${resp.status}`);
+            }
+
+            const payload = await resp.json();
+            this.storeAssetMeta = payload;
+            this.storeAssetBaseUrl = payload.asset_base_url || `${this.assetsUrl.replace(/\/$/, '')}/`;
+            this.csvFiles = Array.isArray(payload.csv_files) ? payload.csv_files : [];
+
+            if (this.csvFiles.length === 0) {
+                this.activeCsvFile = null;
+                this.csvRowIndex = new Map();
+                this.setCsvState('no-csv');
+            } else if (this.csvFiles.length > 1) {
+                this.activeCsvFile = null;
+                this.csvRowIndex = new Map();
+                this.setCsvState('multiple', `Detected multiple CSV files (${this.csvFiles.join(', ')}), not automatically selected.`);
+            } else {
+                this.activeCsvFile = this.csvFiles[0];
+                await this.loadCsvFile(this.activeCsvFile);
+            }
+        } catch (error) {
+            console.warn('Failed to load store CSV assets:', error);
+            this.activeCsvFile = null;
+            this.csvRowIndex = new Map();
+            this.setCsvState('error', 'Failed to load ML inference results, please try again later.');
+        }
+
+        this.updateImageCsvBar(this.selectedCamera !== null ? this.getCameraById(this.selectedCamera) : null);
+    }
+
+    async loadCsvFile(fileName) {
+        if (!fileName) {
+            this.csvRowIndex = new Map();
+            this.setCsvState('no-csv');
+            return;
+        }
+
+        this.setCsvState('loading', `Loading ${fileName}…`);
+        this.updateImageCsvBar(this.selectedCamera !== null ? this.getCameraById(this.selectedCamera) : null);
+
+        const csvBaseUrl = this.storeAssetBaseUrl || `${this.assetsUrl.replace(/\/$/, '')}/`;
+        const csvUrl = `${csvBaseUrl}${encodeURIComponent(fileName)}`;
+        const resp = await fetch(csvUrl, { cache: 'no-cache' });
+        if (!resp.ok) {
+            throw new Error(`Failed to load CSV: ${resp.status}`);
+        }
+
+        const text = await resp.text();
+        const rows = this.parseCsv(text);
+        this.csvRowIndex = this.indexCsvRows(rows);
+        this.setCsvState('ready');
+    }
+
+    parseCsv(text) {
+        const rows = [];
+        let row = [];
+        let field = '';
+        let inQuotes = false;
+
+        const pushField = () => {
+            row.push(field);
+            field = '';
+        };
+
+        const pushRow = () => {
+            rows.push(row);
+            row = [];
+        };
+
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+
+            if (inQuotes) {
+                if (char === '"') {
+                    if (text[i + 1] === '"') {
+                        field += '"';
+                        i += 1;
+                    } else {
+                        inQuotes = false;
+                    }
+                } else {
+                    field += char;
+                }
+                continue;
+            }
+
+            if (char === '"') {
+                inQuotes = true;
+            } else if (char === ',') {
+                pushField();
+            } else if (char === '\n') {
+                pushField();
+                pushRow();
+            } else if (char !== '\r') {
+                field += char;
+            }
+        }
+
+        if (field.length > 0 || row.length > 0) {
+            pushField();
+            pushRow();
+        }
+
+        if (!rows.length) return [];
+
+        const headers = rows[0].map((header, index) => {
+            const cleaned = (header || '').trim();
+            return index === 0 ? cleaned.replace(/^\uFEFF/, '') : cleaned;
+        });
+
+        return rows.slice(1)
+            .filter(values => values.some(value => String(value || '').trim().length > 0))
+            .map(values => {
+                const result = {};
+                headers.forEach((header, index) => {
+                    if (!header) return;
+                    result[header] = (values[index] || '').trim();
+                });
+                return result;
+            });
+    }
+
+    indexCsvRows(rows) {
+        const index = new Map();
+        for (const row of rows) {
+            const imageName = row.image_name || row.image || row.filename || '';
+            const stem = this.getImageStem(imageName);
+            if (!stem || index.has(stem)) continue;
+            index.set(stem, row);
+        }
+        return index;
+    }
+
+    getCsvRowForImage(imageName) {
+        const stem = this.getImageStem(imageName);
+        if (!stem) return null;
+        return this.csvRowIndex.get(stem) || null;
+    }
+
+    resetImageCsvBar() {
+        const bar = document.getElementById('imageCsvBar');
+        const status = document.getElementById('imageCsvStatus');
+        const cards = document.getElementById('imageCsvCards');
+        if (!bar || !status || !cards) return;
+
+        bar.classList.remove('visible');
+        status.className = 'image-csv-status';
+        status.textContent = '';
+        cards.classList.remove('visible');
+
+        const fields = [
+            'imageCsvLeftCategory',
+            'imageCsvLeftSubCategory',
+            'imageCsvRightCategory',
+            'imageCsvRightSubCategory',
+        ];
+        for (const fieldId of fields) {
+            const el = document.getElementById(fieldId);
+            if (el) el.textContent = '-';
+        }
+    }
+
+    showImageCsvStatus(message, variant = 'placeholder') {
+        const bar = document.getElementById('imageCsvBar');
+        const status = document.getElementById('imageCsvStatus');
+        const cards = document.getElementById('imageCsvCards');
+        if (!bar || !status || !cards) return;
+
+        bar.classList.add('visible');
+        cards.classList.remove('visible');
+        status.textContent = message;
+        status.className = `image-csv-status visible image-csv-status--${variant}`;
+    }
+
+    showImageCsvCards(row) {
+        const bar = document.getElementById('imageCsvBar');
+        const status = document.getElementById('imageCsvStatus');
+        const cards = document.getElementById('imageCsvCards');
+        if (!bar || !status || !cards) return;
+
+        const assignText = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value || '-';
+        };
+
+        assignText('imageCsvLeftCategory', row.left_category);
+        assignText('imageCsvLeftSubCategory', row.left_sub_category);
+        assignText('imageCsvRightCategory', row.right_category);
+        assignText('imageCsvRightSubCategory', row.right_sub_category);
+
+        bar.classList.add('visible');
+        status.className = 'image-csv-status';
+        status.textContent = '';
+        cards.classList.add('visible');
+    }
+
+    updateImageCsvBar(cam) {
+        this.resetImageCsvBar();
+        if (!cam || !cam.imageName) return;
+
+        if (this.csvLoadState === 'no-csv') {
+            return;
+        }
+
+        if (this.csvLoadState === 'loading') {
+            this.showImageCsvStatus(this.csvStatusMessage || 'loading…', 'placeholder');
+            return;
+        }
+
+        if (this.csvLoadState === 'multiple') {
+            this.showImageCsvStatus(this.csvStatusMessage || 'Detected multiple CSV files, not automatically selected.', 'warning');
+            return;
+        }
+
+        if (this.csvLoadState === 'error') {
+            this.showImageCsvStatus(this.csvStatusMessage || 'Failed to load ML inference results, please try again later.', 'error');
+            return;
+        }
+
+        const row = this.getCsvRowForImage(cam.imageName);
+        if (!row) {
+            this.showImageCsvStatus('No CSV results available', 'placeholder');
+            return;
+        }
+
+        this.showImageCsvCards(row);
     }
 
     handleUrlParams() {
@@ -858,7 +1121,7 @@ class StoreLayoutViewer {
 
     getCameraRecog(cam) {
         if (!cam || !cam.imageName) return null;
-        const stem = cam.imageName.replace(/\.[^.]+$/, '');
+        const stem = this.getImageStem(cam.imageName);
         return this.recogData[stem] || null;
     }
 
@@ -2282,6 +2545,7 @@ class StoreLayoutViewer {
 
             // Update recognition bar
             this.updateImageRecogBar(cam);
+            this.updateImageCsvBar(cam);
 
             // Update timeline position
             this.updateTimelinePosition(id);
@@ -2312,6 +2576,7 @@ class StoreLayoutViewer {
         imageDateTime.textContent = '';
         imageDateTime.classList.remove('visible');
         this.updateImageRecogBar(null);
+        this.updateImageCsvBar(null);
         this.desiredMainImageName = null;
         this.pendingMainImageName = null;
         if (this.preloadTimer) {
@@ -7812,6 +8077,7 @@ document.addEventListener('DOMContentLoaded', () => {
         readOnly: window.VIEWER_READ_ONLY === true,
         dataBaseUrl: window.LAYOUT_DATA_BASE_URL || './',
         saveBaseUrl: window.LAYOUT_SAVE_BASE_URL || '',
+        assetsUrl: window.LAYOUT_ASSETS_URL || '',
         labelsYamlUrl: window.LAYOUT_LABELS_YAML_URL || 'labels.yaml',
         businessCategoryYamlUrl: window.LAYOUT_BUSINESS_L1_L2_YAML_URL || 'business_l1_l2.yaml',
     });

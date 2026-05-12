@@ -351,6 +351,127 @@ input[type="checkbox"]:focus-visible {
     font-size: 11px;
 }
 
+#imageCsvBar {
+    display: none;
+    flex-direction: column;
+    background:
+        radial-gradient(circle at top, rgba(255, 255, 255, 0.52), transparent 55%),
+        linear-gradient(180deg, #f7efdf 0%, #efe0c4 100%);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+#imageCsvBar.visible {
+    display: flex;
+}
+
+.image-csv-status {
+    display: none;
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    background: rgba(255, 252, 244, 0.78);
+    border: 1px solid rgba(186, 167, 137, 0.75);
+}
+
+.image-csv-status.visible {
+    display: block;
+}
+
+.image-csv-status.image-csv-status--warning {
+    color: #8a5a2b;
+    background: rgba(255, 247, 230, 0.94);
+    border-color: rgba(184, 110, 36, 0.35);
+}
+
+.image-csv-status.image-csv-status--error {
+    color: #8b2e24;
+    background: rgba(255, 239, 236, 0.94);
+    border-color: rgba(192, 57, 43, 0.28);
+}
+
+.image-csv-status.image-csv-status--placeholder {
+    color: var(--text-muted);
+}
+
+.image-csv-cards {
+    display: none;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.image-csv-cards.visible {
+    display: flex;
+}
+
+.image-csv-card {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: calc(50% - 12px);
+    padding: 2px 2px;
+    border-radius: 8px;
+    border: 1px solid rgba(186, 167, 137, 0.72);
+    background: rgba(255, 252, 246, 0.94);
+}
+
+.image-csv-card-right {
+    margin-left: auto;
+}
+
+.image-csv-card-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+}
+
+.image-csv-card-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+/* .image-csv-card-row {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.image-csv-card-label {
+    font-weight: 700;
+    color: var(--accent);
+} */
+
+.image-csv-card-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-primary);
+
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.image-csv-card-label {
+    flex: 0 0 auto;
+    font-weight: 700;
+    color: var(--accent);
+}
+
+.image-csv-card-row span:last-child {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .delete-companion-btn {
     background: #c0392b !important;
     color: #fff !important;
@@ -557,8 +678,8 @@ input[type="checkbox"]:focus-visible {
 
 #scaleBar {
     position: absolute;
-    bottom: 16px;
-    right: 16px;
+    bottom: 4px;
+    right: 4px;
     z-index: 5;
     pointer-events: none;
     display: flex;
@@ -670,6 +791,29 @@ input[type="checkbox"]:focus-visible {
     opacity: 0.35;
 }
 
+#helpOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+#helpOverlay.visible {
+    display: flex;
+}
+
+#helpContent {
+    max-height: 80vh;
+    overflow-y: auto;
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    width: 600px;
+    max-width: 90vw;
+}
 /* Map legend */
 
 #mapLegend {
@@ -1877,6 +2021,15 @@ body.split-divider-dragging * {
     #imagePanel {
         min-width: unset;
         height: 60vh;
+    }
+
+    .image-csv-cards.visible {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .image-csv-card {
+        max-width: 100%;
     }
 
     .attr-row--three,
