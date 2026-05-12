@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Store Layout Map</title>
-    <link rel="stylesheet" href="/static/store_layout/viewer.css?v=3">
+    <link rel="stylesheet" href="/static/store_layout/viewer.css?v=4">
 </head>
 <body>
     <div id="app">
@@ -190,6 +190,16 @@
                 <tr><td>L1–L5 buttons</td><td>Toggle layer visibility</td></tr>
                 <tr><td>Escape</td><td>Deselect / cancel polygon</td></tr>
             </table>
+            <div class="help-settings">
+                <h2>Display</h2>
+                <label class="help-toggle-row" for="englishOnlyToggle">
+                    <span class="help-toggle-copy">
+                        <span class="help-toggle-title">Mystery Mode</span>
+                        <span class="help-toggle-note">Display a cleaner view for annotations, regions, fields, and options.</span>
+                    </span>
+                    <input type="checkbox" id="englishOnlyToggle">
+                </label>
+            </div>
             <button class="close-help" onclick="document.getElementById('helpOverlay').classList.remove('visible')">Close</button>
         </div>
     </div>
@@ -267,6 +277,6 @@
         });
         {% endif %}
     </script>
-    <script src="/static/store_layout/viewer.js?v=3"></script>
+    <script src="/static/store_layout/viewer.js?v=4"></script>
 </body>
 </html>

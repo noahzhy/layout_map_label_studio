@@ -10,6 +10,8 @@
 // Map zoom limits (easy to tune)
 const MAP_MIN_ZOOM = 0.1;
 const MAP_MAX_ZOOM = 25.0;
+const CHINESE_TEXT_REGEX = /[\u3400-\u9fff\uf900-\ufaff]/u;
+const CHINESE_TEXT_REGEX_GLOBAL = /[\u3400-\u9fff\uf900-\ufaff]/gu;
 
 // ============================================================================
 // Shader Sources
@@ -225,6 +227,11 @@ class StoreLayoutViewer {
         this.labelsYamlUrl = options.labelsYamlUrl || 'labels.yaml';
         this.businessCategoryYamlUrl = options.businessCategoryYamlUrl || 'business_l1_l2.yaml';
 
+        // Display preferences
+        this.englishOnlyStorageKey = 'storeLayout_englishOnly';
+        this.englishOnly = false;
+        this.englishDisplayCache = new Map();
+
         // Per-image recognition/taxonomy data (from recognize_task.py)
         this.recogData = {};
         this.showRecogDetails = false;
@@ -369,6 +376,7 @@ class StoreLayoutViewer {
     }
 
     init() {
+        this.loadEnglishOnlyPreference();
         this.setupWebGL();
         this.setupEventListeners();
         this.loadLabelsConfig();
@@ -548,6 +556,104 @@ class StoreLayoutViewer {
         if (!name) return '';
         const fileName = String(name).split('/').pop().split('?')[0].split('#')[0];
         return fileName.replace(/\.[^.]+$/, '');
+    }
+
+    loadEnglishOnlyPreference() {
+        try {
+            this.englishOnly = localStorage.getItem(this.englishOnlyStorageKey) === 'true';
+        } catch (_) {
+            this.englishOnly = false;
+        }
+        this.syncEnglishOnlyToggle();
+    }
+
+    persistEnglishOnlyPreference() {
+        try {
+            localStorage.setItem(this.englishOnlyStorageKey, this.englishOnly ? 'true' : 'false');
+        } catch (_) { /* ignore */ }
+    }
+
+    syncEnglishOnlyToggle() {
+        const toggle = document.getElementById('englishOnlyToggle');
+        if (toggle) toggle.checked = this.englishOnly;
+    }
+
+    setEnglishOnly(nextValue) {
+        const enabled = Boolean(nextValue);
+        const changed = this.englishOnly !== enabled;
+
+        this.englishOnly = enabled;
+        this.persistEnglishOnlyPreference();
+        this.syncEnglishOnlyToggle();
+
+        if (!changed) return;
+
+        this.englishDisplayCache.clear();
+        this.refreshEnglishOnlyDisplay();
+    }
+
+    refreshEnglishOnlyDisplay() {
+        const picker = document.getElementById('labelPicker');
+        const pickerAnchor = picker
+            ? {
+                x: picker.getBoundingClientRect().left,
+                y: picker.getBoundingClientRect().top,
+            }
+            : null;
+
+        this.render();
+        this.renderMapLegend();
+
+        if (pickerAnchor && (this.pendingBox || this.pendingPolygon)) {
+            this.showLabelPicker(pickerAnchor.x, pickerAnchor.y);
+        }
+    }
+
+    getDisplayText(value) {
+        if (value === null || value === undefined) return '';
+
+        const rawText = String(value);
+        if (!this.englishOnly) return rawText;
+
+        const trimmed = rawText.trim();
+        if (!trimmed) return '';
+
+        const cached = this.englishDisplayCache.get(trimmed);
+        if (cached !== undefined) return cached;
+
+        let result = trimmed.normalize('NFKC');
+
+        if (!CHINESE_TEXT_REGEX.test(result)) {
+            this.englishDisplayCache.set(trimmed, result);
+            return result;
+        }
+
+        result = result
+            .replace(/\s*<[^<>]*[\u3400-\u9fff\uf900-\ufaff][^<>]*>\s*/gu, ' ')
+            .replace(/\s*\([^()]*[\u3400-\u9fff\uf900-\ufaff][^()]*\)\s*/gu, ' ')
+            .replace(/\s*（[^（）]*[\u3400-\u9fff\uf900-\ufaff][^（）]*）\s*/gu, ' ')
+            .replace(/\s*\[[^\[\]]*[\u3400-\u9fff\uf900-\ufaff][^\[\]]*\]\s*/gu, ' ')
+            .replace(/\s*【[^【】]*[\u3400-\u9fff\uf900-\ufaff][^【】]*】\s*/gu, ' ')
+            .replace(/\s*「[^「」]*[\u3400-\u9fff\uf900-\ufaff][^「」]*」\s*/gu, ' ')
+            .replace(/\s*『[^『』]*[\u3400-\u9fff\uf900-\ufaff][^『』]*』\s*/gu, ' ')
+            .replace(CHINESE_TEXT_REGEX_GLOBAL, ' ')
+            .replace(/[，。；：、！？]/gu, ' ')
+            .replace(/<\s*>|\(\s*\)|（\s*）|\[\s*\]|【\s*】|「\s*」|『\s*』/gu, ' ')
+            .replace(/\s*([·/,:;|])\s*/g, ' $1 ')
+            .replace(/(?:^|\s)[·/,:;|](?=\s|$)/g, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .replace(/^[·/,:;|\s]+|[·/,:;|\s]+$/g, '')
+            .trim();
+
+        this.englishDisplayCache.set(trimmed, result);
+        return result;
+    }
+
+    getDisplayTextList(value) {
+        const values = Array.isArray(value) ? value : [value];
+        return values
+            .map(item => this.getDisplayText(item).trim())
+            .filter(Boolean);
     }
 
     setCsvState(state, message = '') {
@@ -2130,7 +2236,8 @@ class StoreLayoutViewer {
                 continue;
             }
 
-            const label = typeof annotation.label === 'string' ? annotation.label.trim() : '';
+            const rawLabel = typeof annotation.label === 'string' ? annotation.label.trim() : '';
+            const label = this.getDisplayText(rawLabel).trim();
             if (!label) continue;
 
             const approxWidth = Math.min(144, Math.max(52, label.length * 7 + 18));
@@ -2158,7 +2265,7 @@ class StoreLayoutViewer {
             el.style.top = `${top}px`;
 
             const when = this.formatDateTimeLocal(annotation.dateTimeLocal);
-            const categoryLabel = category ? category[0].toUpperCase() + category.slice(1) : 'Tag';
+            const categoryLabel = this.getDisplayText(category ? category[0].toUpperCase() + category.slice(1) : 'Tag') || 'Tag';
             el.title = when ? `${categoryLabel}: ${label} (${when})` : `${categoryLabel}: ${label}`;
             fragment.appendChild(el);
         }
@@ -2186,7 +2293,7 @@ class StoreLayoutViewer {
                 const key = `map:${cat}`;
                 if (!entries.has(key)) {
                     const color = MAP_ANNOTATION_COLORS[cat] || '#8a5a2b';
-                    const displayName = cat[0].toUpperCase() + cat.slice(1);
+                    const displayName = this.getDisplayText(cat[0].toUpperCase() + cat.slice(1)) || (cat[0].toUpperCase() + cat.slice(1));
                     entries.set(key, { color, label: displayName });
                 }
             }
@@ -2197,12 +2304,14 @@ class StoreLayoutViewer {
             const label = typeof box.label === 'string' ? box.label.trim() : '';
             const attribute = typeof box.attribute === 'string' ? box.attribute.trim() : '';
             if (!label || !attribute) continue;
+            const displayLabel = this.getDisplayText(label).trim();
+            if (!displayLabel) continue;
 
-            const key = `box:${attribute}:${label}`;
+            const key = `box:${attribute}:${this.normalizeLabelKey(displayLabel) || label}`;
             if (!entries.has(key)) {
                 const theme = this.getLabelTheme(label, attribute);
                 if (theme && theme.accentColor) {
-                    entries.set(key, { color: theme.accentColor, label });
+                    entries.set(key, { color: theme.accentColor, label: displayLabel });
                 }
             }
         }
@@ -4125,7 +4234,7 @@ class StoreLayoutViewer {
     }
 
     getSubcategoryDisplayText(value) {
-        return this.normalizeSubcategoryValues(value).join(', ');
+        return this.getDisplayTextList(this.normalizeSubcategoryValues(value)).join(', ');
     }
 
     getTranslationTableUrl() {
@@ -4567,7 +4676,7 @@ class StoreLayoutViewer {
                     iconSpan.style.cssText = 'margin-right:4px;opacity:0.6;font-size:10px;';
                     btn.appendChild(numSpan);
                     btn.appendChild(iconSpan);
-                    btn.appendChild(document.createTextNode(label));
+                    btn.appendChild(document.createTextNode(this.getDisplayText(label).trim() || '—'));
                     btn.addEventListener('click', (e) => {
                         e.stopPropagation();
                         this.commitPendingBox(label, groupNames[t]);
@@ -4590,7 +4699,7 @@ class StoreLayoutViewer {
                 numSpan.className = 'label-picker-num';
                 numSpan.textContent = `${i + 1}`;
                 btn.appendChild(numSpan);
-                btn.appendChild(document.createTextNode(label));
+                btn.appendChild(document.createTextNode(this.getDisplayText(label).trim() || '—'));
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     this.commitPendingBox(label, '');
@@ -5012,12 +5121,18 @@ class StoreLayoutViewer {
     getSplitRegionLabel(leaf) {
         const attrs = leaf && leaf.attributes ? leaf.attributes : {};
         const parts = [];
-        if (attrs.regionType) parts.push(attrs.regionType);
-        if (attrs.category) parts.push(attrs.category);
+        const regionType = this.getDisplayText(attrs.regionType).trim();
+        if (regionType) parts.push(regionType);
+
+        const category = this.getDisplayText(attrs.category).trim();
+        if (category) parts.push(category);
+
         const subcategoryText = this.getSubcategoryDisplayText(attrs.subcategory);
         if (subcategoryText) parts.push(subcategoryText);
-        const aisle = attrs.aisle || attrs.notes;
+
+        const aisle = this.getDisplayText(attrs.aisle || attrs.notes).trim();
         if (aisle) parts.push(`Aisle ${aisle}`);
+
         const side = this.normalizeAisleDirection(attrs.side);
         if (side) parts.push(side);
         return parts.join(' · ') || 'Region';
@@ -5749,10 +5864,10 @@ class StoreLayoutViewer {
         const labelEl = document.createElement('div');
         labelEl.className = 'annotation-label';
         // For aisle annotations, show the notes number directly on the bbox
-        let labelText = box.label || (box.id !== undefined ? `#${box.id}` : '');
+        let labelText = this.getDisplayText(box.label).trim() || (box.id !== undefined ? `#${box.id}` : '');
         if (box.type === 'split-bbox') labelText = '';
         if (box.attribute === 'aisle' && box.attributes) {
-            const notes = box.attributes.notes;
+            const notes = this.getDisplayText(box.attributes.notes).trim();
             const side = this.normalizeAisleDirection(box.attributes.side);
             if (notes != null && notes !== '') labelText = `Aisle ${notes}`;
             if (side) labelText = labelText ? `${labelText} · ${side}` : side;
@@ -5943,7 +6058,8 @@ class StoreLayoutViewer {
 
     deleteAnnotation(id) {
         const ann = this.annotations.find(a => a.id === id);
-        const name = ann && ann.label ? `"${ann.label}"` : `#${id}`;
+        const displayLabel = ann ? this.getDisplayText(ann.label).trim() : '';
+        const name = displayLabel ? `"${displayLabel}"` : `#${id}`;
         if (!confirm(`Delete annotation ${name}?`)) return;
         this.pushHistory();
         if (this.selectedAnnotation === id) this.selectedAnnotation = null;
@@ -6414,6 +6530,14 @@ class StoreLayoutViewer {
         document.getElementById('helpBtn').addEventListener('click', () => {
             document.getElementById('helpOverlay').classList.toggle('visible');
         });
+
+        const englishOnlyToggle = document.getElementById('englishOnlyToggle');
+        if (englishOnlyToggle) {
+            englishOnlyToggle.addEventListener('change', (e) => {
+                this.setEnglishOnly(e.target.checked);
+                e.target.blur();
+            });
+        }
 
         // Calibration mode toggle
         if (!this.readOnly) {
@@ -7502,7 +7626,8 @@ class StoreLayoutViewer {
         svg.appendChild(polygon);
 
         // Label text: boundary → top-left corner; others → centroid
-        if (ann.label) {
+        const displayLabel = this.getDisplayText(ann.label).trim();
+        if (displayLabel) {
             const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
             if (isBoundary) {
                 const bbMinX = Math.min(...screenVerts.map(v => v.x));
@@ -7527,7 +7652,7 @@ class StoreLayoutViewer {
             text.setAttribute('paint-order', 'stroke');
             text.setAttribute('stroke-width', '4');
             text.style.pointerEvents = 'none';
-            text.textContent = ann.label;
+            text.textContent = displayLabel;
             svg.appendChild(text);
         }
 
@@ -7697,7 +7822,9 @@ class StoreLayoutViewer {
             badge.style.background = theme.accentColor;
             badge.style.color = theme.labelTextColor || '#fff';
         }
-        badge.textContent = splitLeaf ? `${this.getSplitRegionLabel(splitLeaf)}` : (ann.label || `#${ann.id}`);
+        badge.textContent = splitLeaf
+            ? this.getSplitRegionLabel(splitLeaf)
+            : (this.getDisplayText(ann.label).trim() || `#${ann.id}`);
         content.appendChild(badge);
 
         if (splitLeaf) {
@@ -7782,11 +7909,13 @@ class StoreLayoutViewer {
         const splitRegionId = panel.dataset.splitRegionId || '';
         if (splitRegionId && ann.type === 'split-bbox') {
             const splitLeaf = this.findSplitLeaf(this.getSplitRoot(ann), splitRegionId);
-            badge.textContent = splitLeaf ? this.getSplitRegionLabel(splitLeaf) : (ann.label || `#${ann.id}`);
+            badge.textContent = splitLeaf
+                ? this.getSplitRegionLabel(splitLeaf)
+                : (this.getDisplayText(ann.label).trim() || `#${ann.id}`);
             return;
         }
 
-        badge.textContent = ann.label || `#${ann.id}`;
+        badge.textContent = this.getDisplayText(ann.label).trim() || `#${ann.id}`;
     }
 
     refreshAnnotationAttributeDisplay() {
@@ -7821,7 +7950,7 @@ class StoreLayoutViewer {
         for (const opt of values) {
             const o = document.createElement('option');
             o.value = opt;
-            o.textContent = opt;
+            o.textContent = this.getDisplayText(opt).trim() || '—';
             if (selectedValue === opt) o.selected = true;
             selectEl.appendChild(o);
         }
@@ -7877,7 +8006,7 @@ class StoreLayoutViewer {
             handleAfterChange,
             {
                 helpUrl: this.getTranslationTableUrl(),
-                helpTitle: '打开 Sub-category 中文翻译对照表',
+                helpTitle: 'Open Sub-category translation table',
             }
         );
         content.appendChild(subcategoryField);
@@ -7898,7 +8027,7 @@ class StoreLayoutViewer {
             helpLink.href = labelOptions.helpUrl;
             helpLink.target = '_blank';
             helpLink.rel = 'noopener noreferrer';
-            helpLink.title = labelOptions.helpTitle || '打开帮助';
+            helpLink.title = labelOptions.helpTitle || 'Open help';
             helpLink.textContent = '?';
             helpLink.addEventListener('click', (event) => event.stopPropagation());
             lbl.appendChild(helpLink);
@@ -7916,7 +8045,7 @@ class StoreLayoutViewer {
         inp.value = attrs[key] != null ? attrs[key] : '';
         if (inputType === 'number') { inp.min = '0'; inp.step = '1'; inp.style.width = '60px'; }
         if (inputType === 'aisle') {
-            inp.placeholder = '数字/字母';
+            inp.placeholder = this.englishOnly ? 'Numbers / letters' : '数字/字母';
             inp.style.width = '80px';
             inp.style.textTransform = 'uppercase';
             inp.addEventListener('input', () => { inp.value = inp.value.toUpperCase().replace(/[^0-9A-Z]/g, ''); });
@@ -7970,7 +8099,7 @@ class StoreLayoutViewer {
             checkbox.checked = normalizedSelected.includes(opt);
 
             const text = document.createElement('span');
-            text.textContent = opt;
+            text.textContent = this.getDisplayText(opt).trim() || '—';
 
             checkbox.addEventListener('change', () => {
                 const nextValues = Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))
