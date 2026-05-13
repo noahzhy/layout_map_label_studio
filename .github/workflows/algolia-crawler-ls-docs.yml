@@ -1,4 +1,4 @@
-name: Algolia Indexer for Label Studio Docs
+name: Algolia Indexer for Store Layout Map Docs
 
 on:
   push:

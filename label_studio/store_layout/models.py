@@ -37,10 +37,10 @@ class LayoutTask(models.Model):
     """Tracks assignment of a store layout labeling task to a specific annotator."""
 
     class Status(models.TextChoices):
-        PENDING = 'pending', '待标注'
-        IN_PROGRESS = 'in_progress', '标注中'
-        DONE = 'done', '已完成'
-        REVIEWED = 'reviewed', '已审核'
+        PENDING = 'pending', 'pending'
+        IN_PROGRESS = 'in_progress', 'in_progress'
+        DONE = 'done', 'done'
+        REVIEWED = 'reviewed', 'reviewed'
 
     store_id = models.CharField(
         max_length=256,

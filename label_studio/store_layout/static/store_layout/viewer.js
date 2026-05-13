@@ -220,7 +220,7 @@ class StoreLayoutViewer {
         // People/face detection data for blur overlays
         this.detections = {};
 
-        // Path configuration (for Label Studio integration)
+        // Path configuration (for Store Layout Map integration)
         this.dataBaseUrl = options.dataBaseUrl || './';
         this.saveBaseUrl = options.saveBaseUrl || '';
         this.assetsUrl = options.assetsUrl || (this.saveBaseUrl ? `${this.saveBaseUrl}/assets` : '');

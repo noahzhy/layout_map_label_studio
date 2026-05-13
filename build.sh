@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键构建并推送 Label Studio 镜像
+# 一键构建并推送 Store Layout Map 镜像
 # 用法：./build.sh [image_tag]
 # 例如：./build.sh latest-arm64
 #       ./build.sh 1.2.0
@@ -20,7 +20,7 @@ DEFAULT_IMAGE="${BASE_IMAGE%:*}:$timestamp"
 IMAGE="${1:-$DEFAULT_IMAGE}"
 
 echo "========================================"
-echo "  Label Studio — 一键打包"
+echo "  Store Layout Map — 一键打包"
 echo "  镜像: $IMAGE"
 echo "  平台: linux/amd64"
 echo "========================================"

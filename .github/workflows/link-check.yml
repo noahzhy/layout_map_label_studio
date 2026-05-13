@@ -50,7 +50,7 @@ jobs:
           ignorewarnings=http-redirected
           LCEOF
 
-      - name: Check links for Label Studio Docs
+      - name: Check links for Store Layout Map Docs
         run: |
           linkchecker \
             -f /tmp/linkcheckerrc \

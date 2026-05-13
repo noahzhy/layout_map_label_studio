@@ -10,8 +10,8 @@
 #  │       ├── detections.json.gz           ├── detections.json.gz    ← 可选（人脸模糊）
 #  │       ├── images/                      ├── images/               ← 相机图片
 #  │       └── thumbnails/                  └── thumbnails/           ← 缩略图
-#  ├── media/                           media/    ← Label Studio 上传文件（自动创建）
-#  └── export/                          export/   ← Label Studio 导出（自动创建）
+#  ├── media/                           media/    ← Store Layout Map 上传文件（自动创建）
+#  └── export/                          export/   ← Store Layout Map 导出（自动创建）
 #
 #  ./postgres-data/                 /var/lib/postgresql/data/
 #

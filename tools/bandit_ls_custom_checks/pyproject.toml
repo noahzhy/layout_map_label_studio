@@ -1,7 +1,7 @@
 [project]
 name = "bandit-ls-custom-checks"
 version = "1.0.0"
-description = "Bandit plugins with custom security checks for Label Studio"
+description = "Bandit plugins with custom security checks for Store Layout Map"
 requires-python = ">=3.9"
 dependencies = ["bandit>=1.7.0"]
 

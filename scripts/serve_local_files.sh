@@ -24,7 +24,7 @@ eval $FIND_CMD | sed "/${INPUT_DIR_ESCAPED}/s//http:\/\/localhost:${PORT}/" > $O
 
 green=`tput setaf 2`
 reset=`tput sgr0`
-echo "${green}File list stored in '${OUTPUT_FILE}'. Now import it directly from Label Studio UI${reset}"
+echo "${green}File list stored in '${OUTPUT_FILE}'. Now import it directly from Store Layout Map UI${reset}"
 
 echo "Running web server on the port ${PORT}"
 cd $INPUT_DIR

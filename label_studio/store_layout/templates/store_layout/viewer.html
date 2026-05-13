@@ -49,8 +49,8 @@
                 <button id="markDoneBtn"
                     data-status="{{ task.status }}"
                     style="background:{% if task.status == 'done' or task.status == 'reviewed' %}#68d391{% else %}#faf089{% endif %};color:#1a202c;font-weight:600;"
-                    title="完成标注并提交">
-                    {% if task.status == 'done' %}✓ 已完成{% elif task.status == 'reviewed' %}✓ 已审核{% else %}完成标注{% endif %}
+                    title="Complete annotation and submit">
+                    {% if task.status == 'done' %}✓ Completed{% elif task.status == 'reviewed' %}✓ Reviewed{% else %}Complete Annotation{% endif %}
                 </button>
                 {% endif %}
                 <button id="helpBtn">?</button>
@@ -243,9 +243,9 @@
             const isDone = btn.dataset.status === 'done' || btn.dataset.status === 'reviewed';
             if (isDone) { btn.disabled = true; return; }
             btn.addEventListener('click', function () {
-                if (!confirm('确认完成标注并提交？')) return;
+                if (!confirm('Complete annotation and submit？')) return;
                 btn.disabled = true;
-                btn.textContent = '提交中...';
+                btn.textContent = 'Submitting...';
                 fetch('/store_layout/{{ store_id }}/mark-done', {
                     method: 'POST',
                     headers: { 'X-CSRFToken': getCookie('csrftoken') },
@@ -253,18 +253,18 @@
                 .then(r => r.json())
                 .then(data => {
                     if (data.status === 'ok') {
-                        btn.textContent = '✓ 已完成';
+                        btn.textContent = '✓ Completed';
                         btn.style.background = '#68d391';
                     } else {
                         btn.disabled = false;
-                        btn.textContent = '完成标注';
-                        alert('提交失败: ' + (data.message || '未知错误'));
+                        btn.textContent = 'Complete Annotation';
+                        alert('Submission failed: ' + (data.message || 'Unknown error'));
                     }
                 })
                 .catch(() => {
                     btn.disabled = false;
-                    btn.textContent = '完成标注';
-                    alert('网络错误，请重试');
+                    btn.textContent = 'Complete Annotation';
+                    alert('Network error. Please try again.');
                 });
             });
 

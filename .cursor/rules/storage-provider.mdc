@@ -1,13 +1,13 @@
 ---
-description: How to add a new storage or data connector for Label Studio
+description: How to add a new storage or data connector for Store Layout Map
 alwaysApply: false
 ---
-# Implementing New Storage Providers in Label Studio
+# Implementing New Storage Providers in Store Layout Map
 
 ## Overview
-This document describes the process and best practices for adding a new storage provider to Label Studio using the declarative provider schema system.
+This document describes the process and best practices for adding a new storage provider to Store Layout Map using the declarative provider schema system.
 
-Label Studio supports 2 types of cloud storages:
+Store Layout Map supports 2 types of cloud storages:
 1. **Import Storages** (Source Cloud Storages) - for importing tasks/data
 2. **Export Storages** (Target Cloud Storages) - for exporting annotations
 
@@ -21,7 +21,7 @@ Follow all steps below to implement a new storage. More details follow after the
 ### 1. Exploration and preparation
 1. [ ] Carefully read @io_storages/README.md
 2. [ ] Search official documentation for the new storage you want to add
-  - [ ] Determine whether pre-signed URLs are supported, or whether only direct reads are possible. In case of direct reads, we should hide pre-signed URLs toggle and use Label Studio proxy. 
+  - [ ] Determine whether pre-signed URLs are supported, or whether only direct reads are possible. In case of direct reads, we should hide pre-signed URLs toggle and use Store Layout Map proxy. 
   - [ ] Determine whether writes are supported, and how annotations will be stored (objects/blobs, files, rows/strings in a table, etc.)
   - [ ] Understand the provider's Python API/SDK, especially how to read, write, and list objects. If SDK is available, use SDK
 3. If the requester hasn't specified the target edition, recommend Open Source or Enterprise and confirm the choice
@@ -140,7 +140,7 @@ These steps are for manual QA by the requester; remind them after you finish you
 
 ## Backend Implementation
 
-Important note: if you implement a storage for Label Studio Enterprise, replace all paths `label_studio/io_storages` with `label_studio_enterprise/lse_io_storages`.
+Important note: if you implement a storage for Store Layout Map Enterprise, replace all paths `label_studio/io_storages` with `label_studio_enterprise/lse_io_storages`.
 
 ### 1. Create Storage Models
 

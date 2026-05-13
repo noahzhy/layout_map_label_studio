@@ -23,34 +23,18 @@ import {
 const resources = [
   {
     title: "Documentation",
-    url: "https://labelstud.io/guide/",
-  },
-  {
-    title: "API Documentation",
-    url: "https://api.labelstud.io/api-reference/introduction/getting-started",
-  },
-  {
-    title: "Release Notes",
-    url: "https://labelstud.io/learn/categories/release-notes/",
-  },
-  {
-    title: "LabelStud.io Blog",
-    url: "https://labelstud.io/blog/",
-  },
-  {
-    title: "Slack Community",
-    url: "https://slack.labelstud.io",
+    url: "https://clobotics.com/",
   },
 ];
 
 const actions = [
   {
-    title: "创建项目",
+    title: "Create Project",
     icon: IconFolderAdd,
     type: "createProject",
   },
   {
-    title: "邀请成员",
+    title: "Invite Members",
     icon: IconUserAdd,
     type: "inviteMembers",
   },
@@ -136,10 +120,10 @@ export const HomePage: Page = () => {
         <section className="flex flex-col gap-6">
           <div className="flex flex-col gap-1">
             <Typography variant="headline" size="small">
-              你好 👋
+              Welcome 👋
             </Typography>
             <Typography size="small" className="text-neutral-content-subtler">
-              让我们开始吧！选择一个项目继续，或者创建一个新项目来开始标注你的数据。
+              Let's get started! Choose a project to continue, or create a new project to start labeling your data.
             </Typography>
           </div>
           <div className="flex justify-start gap-4">
@@ -163,9 +147,9 @@ export const HomePage: Page = () => {
             title={
               data && data?.count > 0 ? (
                 <>
-                  最近的项目{" "}
+                  Recent Projects{" "}
                   <a href="/projects" className="text-lg font-normal hover:underline">
-                    查看全部
+                    View All
                   </a>
                 </>
               ) : null
@@ -176,7 +160,7 @@ export const HomePage: Page = () => {
                 <Spinner />
               </div>
             ) : isError ? (
-              <div className="h-64 flex justify-center items-center">无法加载项目</div>
+              <div className="h-64 flex justify-center items-center">Unable to load projects</div>
             ) : isSuccess && data && sortedProjects.length === 0 ? (
               <div className="flex flex-col justify-center items-center border border-primary-border-subtle bg-primary-emphasis-subtle rounded-lg h-64">
                 <div
@@ -187,13 +171,13 @@ export const HomePage: Page = () => {
                   <IconFolderOpen />
                 </div>
                 <Typography variant="headline" size="small">
-                  创建你的第一个项目
+                  Create Your First Project
                 </Typography>
                 <Typography size="small" className="text-neutral-content-subtler">
-                    通过创建项目来开始标注你的数据。
+                    Start labeling your data by creating a new project.
                 </Typography>
                 <Button className="mt-4" onClick={() => setModalIsOpen(true)} aria-label="Create new project">
-                  创建项目
+                  Create Project
                 </Button>
               </div>
             ) : isSuccess && data && sortedProjects.length > 0 ? (
@@ -205,32 +189,6 @@ export const HomePage: Page = () => {
             ) : null}
           </SimpleCard>
         </section>
-        <section className="flex flex-col gap-6">
-          <HeidiTips collection="projectSettings" />
-          <SimpleCard title="Resources" description="Learn, explore and get help" data-testid="resources-card">
-            <ul>
-              {resources.map((link) => {
-                return (
-                  <li key={link.title}>
-                    <a
-                      href={link.url}
-                      className="py-2 px-1 flex justify-between items-center text-neutral-content"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {link.title}
-                      <IconExternal className="text-primary-icon" />
-                    </a>
-                  </li>
-                );
-              })}
-            </ul>
-          </SimpleCard>
-          <div className="flex gap-2 items-center">
-            <IconHumanSignal />
-            <span className="text-neutral-content-subtle">Label Studio 版本: 社区版</span>
-          </div>
-        </section>
       </div>
       {modalIsOpen && <CreateProject onClose={() => setModalIsOpen(false)} />}
       <InviteLink opened={invitationIsOpen} onClosed={() => setInvitationIsOpen(false)} />
@@ -238,7 +196,7 @@ export const HomePage: Page = () => {
   );
 };
 
-HomePage.title = "首页";
+HomePage.title = "Home";
 HomePage.path = "/";
 HomePage.exact = true;
 
@@ -264,7 +222,7 @@ function ProjectSimpleCard({ project }: { project: APIProject }) {
             <span className="text-neutral-content truncate">{project.title}</span>
           </Tooltip>
           <div className="text-neutral-content-subtler text-sm">
-            {finished} / {total} 任务 ({total > 0 ? Math.round((finished / total) * 100) : 0}%)
+            {finished} / {total} tasks ({total > 0 ? Math.round((finished / total) * 100) : 0}%)
           </div>
         </div>
         <div className="bg-neutral-surface rounded-full overflow-hidden w-full h-2 shadow-neutral-border-subtle shadow-border-1">

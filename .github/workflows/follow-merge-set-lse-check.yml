@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: hmarr/debug-action@v3.0.0
 
-      - name: Set Label Studio status
+      - name: Set Store Layout Map status
         uses: actions/github-script@v8
         env:
           SHA: "${{ github.event.pull_request.head.sha || github.event.after }}"

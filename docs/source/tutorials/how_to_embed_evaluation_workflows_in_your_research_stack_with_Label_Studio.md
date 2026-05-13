@@ -1,5 +1,5 @@
 ---
-title: How to Embed Evaluation Workflows in Your Research Stack with Label Studio
+title: How to Embed Evaluation Workflows in Your Research Stack with Store Layout Map
 hide_sidebar: true
 order: 999
 open_in_collab: true
@@ -9,15 +9,15 @@ ipynb_repo_path: tutorials/how-to-embed-evaluation-workflows-in-your-research-st
 repo_url: https://github.com/HumanSignal/awesome-label-studio-tutorials/tree/main/tutorials/how-to-embed-evaluation-workflows-in-your-research-stack-with-label-studio
 report_bug_url: https://github.com/HumanSignal/awesome-label-studio-tutorials/issues/new
 thumbnail: /images/tutorials/tutorials-eval-flows-research-stack.png
-meta_title: How to Embed Evaluation Workflows in Your Research Stack with Label Studio
-meta_description: Learn how to build an embedded evaluation workflow directly into your jupyer notebook with Label Studio.
+meta_title: How to Embed Evaluation Workflows in Your Research Stack with Store Layout Map
+meta_description: Learn how to build an embedded evaluation workflow directly into your jupyer notebook with Store Layout Map.
 is_enterprise: true
 badges: SDK, Embed, Colab
 duration: 10-15 mins
 ---
-## Label Studio Requirements
+## Store Layout Map Requirements
 
-This tutorial showcases one or more features available only in Label Studio Enterprise. We recommend [connecting with our team](https://humansignal.com/contact-sales/) to request a trial or to enable them in your account.
+This tutorial showcases one or more features available only in Store Layout Map Enterprise. We recommend [connecting with our team](https://humansignal.com/contact-sales/) to request a trial or to enable them in your account.
 
 ## The Context-Switching Tax
 
@@ -33,7 +33,7 @@ Over the next 15-20 minutes, you'll build an embedded evaluation workflow that:
 
 1. **Loads real medical Q&A data** from Hugging Face (100 tasks)
 2. **Creates a structured evaluation interface** with custom criteria
-3. **Embeds Label Studio directly in this notebook** for zero-context-switch evaluation
+3. **Embeds Store Layout Map directly in this notebook** for zero-context-switch evaluation
 4. **Exports to pandas** for instant analysis and visualization
 5. **Generates insights** about model performance across medical specialties
 
@@ -48,7 +48,7 @@ By the end, you'll have a template you can adapt for any evaluation workflow: co
 This tutorial has two parts:
 
 ### 👤 **Part 1: Admin Setup (One-Time, ~5 minutes)**
-Your Label Studio **Owner/Admin** needs to:
+Your Store Layout Map **Owner/Admin** needs to:
 - Enable embedding for your organization ([request access](https://humansignal.com/contact-sales/))
 - Run Part 1 to generate keys and configure organization
 - **Share the private key** with ML engineers (via secure channel)
@@ -200,7 +200,7 @@ else:
 
 **👋 ML Engineers**: If your admin already configured embedding, **skip to Part 2** below.
 
-**👋 Admins**: This 5-minute setup enables your entire team to embed Label Studio in notebooks.
+**👋 Admins**: This 5-minute setup enables your entire team to embed Store Layout Map in notebooks.
 
 **👤 ADMIN ONLY - Run Once**: Generate keys and configure your organization for embedding.
 
@@ -307,7 +307,7 @@ try:
             <strong>❌ Configuration failed</strong><br>
             {message}<br><br>
             This usually means you need Owner role permissions.<br>
-            Contact your Label Studio admin to configure embedding.
+            Contact your Store Layout Map admin to configure embedding.
         </div>
         """))
 
@@ -326,11 +326,11 @@ except Exception as e:
 **This is the main workflow.** Once your admin has configured embedding (Part 1), you can run this section repeatedly for any evaluation project.
 
 **What you need:**
-- Your personal Label Studio API token (not admin required)
-- Access to your Label Studio Enterprise instance
+- Your personal Store Layout Map API token (not admin required)
+- Access to your Store Layout Map Enterprise instance
 - This takes ~15 minutes first time, ~5 minutes for subsequent projects
 
-## Connect to Label Studio
+## Connect to Store Layout Map
 
 Set your credentials and connect:
 
@@ -388,7 +388,7 @@ if isinstance(EMBED_PRIVATE_KEY, str):
 else:
     private_key_bytes = EMBED_PRIVATE_KEY
 
-# Connect to Label Studio and generate embed token
+# Connect to Store Layout Map and generate embed token
 try:
     from label_studio_sdk.client import LabelStudio
     ls = LabelStudio(base_url=LABEL_STUDIO_URL, api_key=API_KEY)
@@ -500,7 +500,7 @@ display(HTML(f"""
 
 # 🏷️ Create Project
 
-We will create a Label Studio Enterprise project with a labelling config that will allow us to evaluate the responses.
+We will create a Store Layout Map Enterprise project with a labelling config that will allow us to evaluate the responses.
 
 
 ```python

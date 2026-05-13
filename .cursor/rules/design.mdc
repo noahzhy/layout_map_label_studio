@@ -1,10 +1,10 @@
 ---
-description: Design system and UI consistency guidelines for Label Studio
+description: Design system and UI consistency guidelines for Store Layout Map
 globs: **/*.tsx,**/*.jsx,**/*.css
 alwaysApply: false
 ---
 
-# Label Studio Design System
+# Store Layout Map Design System
 
 This rule provides guidance for creating user interfaces consistent with the HumanSignal design language. For complete details, see `DESIGN.md` in the repository root.
 

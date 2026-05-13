@@ -72,19 +72,19 @@
 <body>
     <div class="container">
         <div class="breadcrumb">
-            <a href="{% url 'store_layout:index' %}">← 项目列表</a>
+            <a href="{% url 'store_layout:index' %}">← Project List</a>
             &nbsp;/&nbsp; {{ project.name }}
         </div>
         <h1>{{ project.name }}</h1>
-        <p class="desc">{% if project.description %}{{ project.description }}{% else %}商店标注任务列表{% endif %}</p>
+        <p class="desc">{% if project.description %}{{ project.description }}{% else %}Store annotation task list{% endif %}</p>
 
         {% if is_admin %}
         <div class="admin-bar">
-            <span>在
+            <span>
+                Add store tasks for this project and assign annotators in
                 <a href="/admin/store_layout/layouttask/add/" target="_blank">Django Admin → Tasks</a>
-                为本项目添加商店任务并分配标注员
             </span>
-            <a href="{% url 'store_layout:assign-tasks' pk=project.id %}" style="font-weight:700;color:#38a169;">📋 分配任务管理 →</a>
+            <a href="{% url 'store_layout:assign-tasks' pk=project.id %}" style="font-weight:700;color:#38a169;">📋 Task Assignment Management →</a>
         </div>
         {% endif %}
 
@@ -96,9 +96,9 @@
                 <h2>{{ store.name }}</h2>
                 <div class="store-id">{{ store.id }}</div>
                 {% if not store.on_disk %}
-                    <span class="badge badge-no-data">文件缺失</span>
+                    <span class="badge badge-no-data">Files Missing</span>
                 {% elif store.unassigned %}
-                    <div class="assignees"><span class="badge badge-unassigned">未分配</span></div>
+                    <div class="assignees"><span class="badge badge-unassigned">Unassigned</span></div>
                 {% else %}
                     <div class="assignees">
                     {% for task in store.tasks %}
@@ -113,7 +113,7 @@
                     </div>
                 {% endif %}
                 {% if store.on_disk %}
-                <a class="preview-link" href="{% url 'store_layout:viewer' store_id=store.id %}">预览 →</a>
+                <a class="preview-link" href="{% url 'store_layout:viewer' store_id=store.id %}">Preview →</a>
                 {% endif %}
             </div>
             {% else %}
@@ -123,7 +123,7 @@
                 <div style="margin-top:8px">
                     <span class="badge badge-{{ store.task.status }}">{{ store.task.get_status_display }}</span>
                     {% if store.task.last_saved_at %}
-                    <span style="font-size:11px;color:#9c8f7a;margin-left:6px">上次保存 {{ store.task.last_saved_at|date:"m/d H:i" }}</span>
+                    <span style="font-size:11px;color:#9c8f7a;margin-left:6px">Last saved {{ store.task.last_saved_at|date:"m/d H:i" }}</span>
                     {% endif %}
                 </div>
                 {% if store.task.notes %}
@@ -135,11 +135,11 @@
         </div>
         {% else %}
         <div class="empty-state">
-            <h2>{% if is_admin %}本项目暂无商店任务{% else %}暂无分配给您的任务{% endif %}</h2>
+            <h2>{% if is_admin %}No store tasks in this project{% else %}No tasks assigned to you{% endif %}</h2>
             {% if is_admin %}
-            <p><a href="/admin/store_layout/layouttask/add/" style="color:#8a5a2b">添加任务 →</a></p>
+            <p><a href="/admin/store_layout/layouttask/add/" style="color:#8a5a2b">Add Task →</a></p>
             {% else %}
-            <p>请联系管理员为您分配任务</p>
+            <p>Please contact the administrator to assign tasks to you</p>
             {% endif %}
         </div>
         {% endif %}
