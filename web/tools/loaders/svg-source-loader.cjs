@@ -12,13 +12,15 @@ function svgSourceLoader(src) {
   if (useDisk && resourcePath && fs.existsSync(resourcePath)) {
     const disk = fs.readFileSync(resourcePath, "utf-8");
     if (!disk || !disk.trim().startsWith("<")) {
-      throw new Error(`[svg-source-loader] Invalid SVG content in ${resourcePath}`);
+      this.emitWarning(new Error(`[svg-source-loader] Invalid SVG content in ${resourcePath}; using empty fallback.`));
+      return "";
     }
     return disk;
   }
 
   if (!content || !content.trim().startsWith("<")) {
-    throw new Error(`[svg-source-loader] Empty or invalid SVG content for ${resourcePath}`);
+    this.emitWarning(new Error(`[svg-source-loader] Empty or invalid SVG content for ${resourcePath}; using empty fallback.`));
+    return "";
   }
 
   return content;

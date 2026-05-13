@@ -27,6 +27,25 @@ echo "========================================"
 
 cd "$(dirname "$0")"
 
+# ─── 构建加速 ─────────────────────────────────────────────────────────────
+# 默认开启 buildx 本地缓存；反复构建时可复用 yarn / poetry / webpack 等层缓存。
+# 如需完全干净构建：BUILD_CACHE=0 ./build.sh [image_tag]
+export DOCKER_BUILDKIT=1
+BUILD_CACHE="${BUILD_CACHE:-1}"
+BUILD_CACHE_DIR="${BUILD_CACHE_DIR:-.buildx-cache}"
+BUILD_CACHE_NEXT_DIR="${BUILD_CACHE_DIR}.new"
+
+CACHE_ARGS=()
+if [[ "$BUILD_CACHE" != "0" ]]; then
+    mkdir -p "$BUILD_CACHE_DIR"
+    rm -rf "$BUILD_CACHE_NEXT_DIR"
+    CACHE_ARGS=(
+        --cache-from "type=local,src=$BUILD_CACHE_DIR"
+        --cache-to "type=local,dest=$BUILD_CACHE_NEXT_DIR,mode=max"
+    )
+    echo "▶ 已启用 buildx 本地缓存：$BUILD_CACHE_DIR"
+fi
+
 # ─── 同步 .env ─────────────────────────────────────────────────────────────
 # 始终用 .env.deploy 覆盖 .env，确保配置一致
 if [[ -f ".env.deploy" ]]; then
@@ -41,7 +60,13 @@ docker buildx build \
     --platform linux/amd64 \
     --tag "$IMAGE" \
     --load \
+    "${CACHE_ARGS[@]}" \
     .
+
+if [[ "$BUILD_CACHE" != "0" && -d "$BUILD_CACHE_NEXT_DIR" ]]; then
+    rm -rf "$BUILD_CACHE_DIR"
+    mv "$BUILD_CACHE_NEXT_DIR" "$BUILD_CACHE_DIR"
+fi
 
 echo ""
 echo "▶ 构建成功：$IMAGE"
