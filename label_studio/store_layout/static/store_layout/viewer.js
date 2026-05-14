@@ -10,6 +10,10 @@
 // Map zoom limits (easy to tune)
 const MAP_MIN_ZOOM = 0.1;
 const MAP_MAX_ZOOM = 25.0;
+const MAP_DATA_FILE = 'viewer_map.json.gz';
+const LABEL_DATA_FILE = 'viewer_label.json.gz';
+const CHINESE_TEXT_REGEX = /[\u3400-\u9fff\uf900-\ufaff]/u;
+const CHINESE_TEXT_REGEX_GLOBAL = /[\u3400-\u9fff\uf900-\ufaff]/gu;
 
 // ============================================================================
 // Shader Sources
@@ -218,12 +222,17 @@ class StoreLayoutViewer {
         // People/face detection data for blur overlays
         this.detections = {};
 
-        // Path configuration (for Label Studio integration)
+        // Path configuration (for Store Layout Map integration)
         this.dataBaseUrl = options.dataBaseUrl || './';
         this.saveBaseUrl = options.saveBaseUrl || '';
         this.assetsUrl = options.assetsUrl || (this.saveBaseUrl ? `${this.saveBaseUrl}/assets` : '');
         this.labelsYamlUrl = options.labelsYamlUrl || 'labels.yaml';
         this.businessCategoryYamlUrl = options.businessCategoryYamlUrl || 'business_l1_l2.yaml';
+
+        // Display preferences
+        this.englishOnlyStorageKey = 'storeLayout_englishOnly';
+        this.englishOnly = false;
+        this.englishDisplayCache = new Map();
 
         // Per-image recognition/taxonomy data (from recognize_task.py)
         this.recogData = {};
@@ -304,8 +313,12 @@ class StoreLayoutViewer {
         this.baseRatio = null;          // real distance per world unit
         this.calibrationUnit = 'm';
 
-        // Loaded data file name (for save-back)
+        // Loaded data file names (for save-back / split map-label storage)
         this.loadedDataFileName = null;
+        this.loadedMapFileName = null;
+        this.loadedLabelFileName = null;
+        this.mapDataNeedsInitialSave = false;
+        this.hasUnsavedMapChanges = false;
 
         // Performance: flat Float32Array for GPU upload (avoids flat() on every upload)
         this.pointCloudBuffer = new Float32Array(0);
@@ -369,6 +382,7 @@ class StoreLayoutViewer {
     }
 
     init() {
+        this.loadEnglishOnlyPreference();
         this.setupWebGL();
         this.setupEventListeners();
         this.loadLabelsConfig();
@@ -507,21 +521,41 @@ class StoreLayoutViewer {
     async tryAutoLoad() {
         const base = this.dataBaseUrl;
         try {
+            try {
+                const mapData = await this.fetchGzippedJson(base + MAP_DATA_FILE);
+                let labelData = {};
+                try {
+                    labelData = await this.fetchGzippedJson(base + LABEL_DATA_FILE);
+                } catch (labelError) {
+                    console.warn('No separate label data found; loading map data only:', labelError);
+                }
+
+                this.loadedMapFileName = MAP_DATA_FILE;
+                this.loadedLabelFileName = LABEL_DATA_FILE;
+                this.loadedDataFileName = LABEL_DATA_FILE;
+                this.mapDataNeedsInitialSave = false;
+                this.loadData(this.mergeMapAndLabelData(mapData, labelData));
+                this.handleUrlParams();
+                return;
+            } catch (mapError) {
+                // New split storage is not available yet; fall back to legacy single-file data below.
+            }
+
             // Find the newest viewer_*.json.gz file by Last-Modified time
-            let dataUrl = base + 'viewer_label.json.gz';
+            let dataUrl = base + LABEL_DATA_FILE;
             try {
                 const listResp = await fetch(base);
                 if (listResp.ok) {
                     const text = await listResp.text();
                     const matches = text.match(/viewer_.*?\.json\.gz/g);
                     if (matches && matches.length > 0) {
-                        const taskFiles = [...new Set(matches)].filter(f => f !== 'viewer_label.json.gz');
+                        const taskFiles = [...new Set(matches)].filter(f => f !== LABEL_DATA_FILE && f !== MAP_DATA_FILE);
 
                         if (taskFiles.length > 0) {
                             taskFiles.sort().reverse();
                             dataUrl = base + taskFiles[0];
                         } else {
-                            dataUrl = base + 'viewer_label.json.gz'; // 只有没找到任务文件时才用默认的
+                            dataUrl = base + LABEL_DATA_FILE; // 只有没找到任务文件时才用默认的
                         }
                     }
                 }
@@ -529,6 +563,9 @@ class StoreLayoutViewer {
 
             this.loadedDataFileName = dataUrl.split('/').pop();
             const data = await this.fetchGzippedJson(dataUrl);
+            this.loadedMapFileName = null;
+            this.loadedLabelFileName = LABEL_DATA_FILE;
+            this.mapDataNeedsInitialSave = this.hasEmbeddedMapData(data);
             this.loadData(data);
             this.handleUrlParams();
         } catch (e) {
@@ -544,10 +581,140 @@ class StoreLayoutViewer {
         }
     }
 
+    hasEmbeddedMapData(data) {
+        return Boolean(
+            data &&
+            typeof data === 'object' &&
+            (Array.isArray(data.pointCloud) || Array.isArray(data.cameras) || data.metadata)
+        );
+    }
+
+    mergeMapAndLabelData(mapData = {}, labelData = {}) {
+        const merged = { ...(mapData || {}) };
+        const label = labelData || {};
+
+        for (const [key, value] of Object.entries(label)) {
+            if (['pointCloud', 'cameras', 'mapAnnotations', 'matchPairs', 'trackPairs', 'recogData'].includes(key)) {
+                continue;
+            }
+            if (key === 'metadata') {
+                merged.metadata = { ...(mapData.metadata || {}), ...(value || {}) };
+                continue;
+            }
+            if (key === 'rotationApplied' && typeof mapData.rotationApplied === 'number') {
+                continue;
+            }
+            merged[key] = value;
+        }
+
+        if (!Array.isArray(merged.annotations)) {
+            merged.annotations = [];
+        }
+        return merged;
+    }
+
     getImageStem(name) {
         if (!name) return '';
         const fileName = String(name).split('/').pop().split('?')[0].split('#')[0];
         return fileName.replace(/\.[^.]+$/, '');
+    }
+
+    loadEnglishOnlyPreference() {
+        try {
+            this.englishOnly = localStorage.getItem(this.englishOnlyStorageKey) === 'true';
+        } catch (_) {
+            this.englishOnly = false;
+        }
+        this.syncEnglishOnlyToggle();
+    }
+
+    persistEnglishOnlyPreference() {
+        try {
+            localStorage.setItem(this.englishOnlyStorageKey, this.englishOnly ? 'true' : 'false');
+        } catch (_) { /* ignore */ }
+    }
+
+    syncEnglishOnlyToggle() {
+        const toggle = document.getElementById('englishOnlyToggle');
+        if (toggle) toggle.checked = this.englishOnly;
+    }
+
+    setEnglishOnly(nextValue) {
+        const enabled = Boolean(nextValue);
+        const changed = this.englishOnly !== enabled;
+
+        this.englishOnly = enabled;
+        this.persistEnglishOnlyPreference();
+        this.syncEnglishOnlyToggle();
+
+        if (!changed) return;
+
+        this.englishDisplayCache.clear();
+        this.refreshEnglishOnlyDisplay();
+    }
+
+    refreshEnglishOnlyDisplay() {
+        const picker = document.getElementById('labelPicker');
+        const pickerAnchor = picker
+            ? {
+                x: picker.getBoundingClientRect().left,
+                y: picker.getBoundingClientRect().top,
+            }
+            : null;
+
+        this.render();
+        this.renderMapLegend();
+
+        if (pickerAnchor && (this.pendingBox || this.pendingPolygon)) {
+            this.showLabelPicker(pickerAnchor.x, pickerAnchor.y);
+        }
+    }
+
+    getDisplayText(value) {
+        if (value === null || value === undefined) return '';
+
+        const rawText = String(value);
+        if (!this.englishOnly) return rawText;
+
+        const trimmed = rawText.trim();
+        if (!trimmed) return '';
+
+        const cached = this.englishDisplayCache.get(trimmed);
+        if (cached !== undefined) return cached;
+
+        let result = trimmed.normalize('NFKC');
+
+        if (!CHINESE_TEXT_REGEX.test(result)) {
+            this.englishDisplayCache.set(trimmed, result);
+            return result;
+        }
+
+        result = result
+            .replace(/\s*<[^<>]*[\u3400-\u9fff\uf900-\ufaff][^<>]*>\s*/gu, ' ')
+            .replace(/\s*\([^()]*[\u3400-\u9fff\uf900-\ufaff][^()]*\)\s*/gu, ' ')
+            .replace(/\s*（[^（）]*[\u3400-\u9fff\uf900-\ufaff][^（）]*）\s*/gu, ' ')
+            .replace(/\s*\[[^\[\]]*[\u3400-\u9fff\uf900-\ufaff][^\[\]]*\]\s*/gu, ' ')
+            .replace(/\s*【[^【】]*[\u3400-\u9fff\uf900-\ufaff][^【】]*】\s*/gu, ' ')
+            .replace(/\s*「[^「」]*[\u3400-\u9fff\uf900-\ufaff][^「」]*」\s*/gu, ' ')
+            .replace(/\s*『[^『』]*[\u3400-\u9fff\uf900-\ufaff][^『』]*』\s*/gu, ' ')
+            .replace(CHINESE_TEXT_REGEX_GLOBAL, ' ')
+            .replace(/[，。；：、！？]/gu, ' ')
+            .replace(/<\s*>|\(\s*\)|（\s*）|\[\s*\]|【\s*】|「\s*」|『\s*』/gu, ' ')
+            .replace(/\s*([·/,:;|])\s*/g, ' $1 ')
+            .replace(/(?:^|\s)[·/,:;|](?=\s|$)/g, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .replace(/^[·/,:;|\s]+|[·/,:;|\s]+$/g, '')
+            .trim();
+
+        this.englishDisplayCache.set(trimmed, result);
+        return result;
+    }
+
+    getDisplayTextList(value) {
+        const values = Array.isArray(value) ? value : [value];
+        return values
+            .map(item => this.getDisplayText(item).trim())
+            .filter(Boolean);
     }
 
     setCsvState(state, message = '') {
@@ -874,6 +1041,7 @@ class StoreLayoutViewer {
         }
 
         this.hasUnsavedChanges = false;
+        this.hasUnsavedMapChanges = false;
         this.syncRotationSlider();
 
         const storeName = this.metadata.storeName ? String(this.metadata.storeName).trim() : '';
@@ -2130,7 +2298,8 @@ class StoreLayoutViewer {
                 continue;
             }
 
-            const label = typeof annotation.label === 'string' ? annotation.label.trim() : '';
+            const rawLabel = typeof annotation.label === 'string' ? annotation.label.trim() : '';
+            const label = this.getDisplayText(rawLabel).trim();
             if (!label) continue;
 
             const approxWidth = Math.min(144, Math.max(52, label.length * 7 + 18));
@@ -2158,7 +2327,7 @@ class StoreLayoutViewer {
             el.style.top = `${top}px`;
 
             const when = this.formatDateTimeLocal(annotation.dateTimeLocal);
-            const categoryLabel = category ? category[0].toUpperCase() + category.slice(1) : 'Tag';
+            const categoryLabel = this.getDisplayText(category ? category[0].toUpperCase() + category.slice(1) : 'Tag') || 'Tag';
             el.title = when ? `${categoryLabel}: ${label} (${when})` : `${categoryLabel}: ${label}`;
             fragment.appendChild(el);
         }
@@ -2186,7 +2355,7 @@ class StoreLayoutViewer {
                 const key = `map:${cat}`;
                 if (!entries.has(key)) {
                     const color = MAP_ANNOTATION_COLORS[cat] || '#8a5a2b';
-                    const displayName = cat[0].toUpperCase() + cat.slice(1);
+                    const displayName = this.getDisplayText(cat[0].toUpperCase() + cat.slice(1)) || (cat[0].toUpperCase() + cat.slice(1));
                     entries.set(key, { color, label: displayName });
                 }
             }
@@ -2197,12 +2366,14 @@ class StoreLayoutViewer {
             const label = typeof box.label === 'string' ? box.label.trim() : '';
             const attribute = typeof box.attribute === 'string' ? box.attribute.trim() : '';
             if (!label || !attribute) continue;
+            const displayLabel = this.getDisplayText(label).trim();
+            if (!displayLabel) continue;
 
-            const key = `box:${attribute}:${label}`;
+            const key = `box:${attribute}:${this.normalizeLabelKey(displayLabel) || label}`;
             if (!entries.has(key)) {
                 const theme = this.getLabelTheme(label, attribute);
                 if (theme && theme.accentColor) {
-                    entries.set(key, { color: theme.accentColor, label });
+                    entries.set(key, { color: theme.accentColor, label: displayLabel });
                 }
             }
         }
@@ -3834,6 +4005,7 @@ class StoreLayoutViewer {
         this.updateOverlayPulseAnimationState();
         this.updateVisibleCameras();
         this.hasUnsavedChanges = true;
+        this.hasUnsavedMapChanges = true;
         this.render();
 
         // Select the newly added companion
@@ -3857,6 +4029,7 @@ class StoreLayoutViewer {
         this.updateOverlayPulseAnimationState();
         this.updateVisibleCameras();
         this.hasUnsavedChanges = true;
+        this.hasUnsavedMapChanges = true;
         this.render();
     }
 
@@ -4125,7 +4298,7 @@ class StoreLayoutViewer {
     }
 
     getSubcategoryDisplayText(value) {
-        return this.normalizeSubcategoryValues(value).join(', ');
+        return this.getDisplayTextList(this.normalizeSubcategoryValues(value)).join(', ');
     }
 
     getTranslationTableUrl() {
@@ -4567,7 +4740,7 @@ class StoreLayoutViewer {
                     iconSpan.style.cssText = 'margin-right:4px;opacity:0.6;font-size:10px;';
                     btn.appendChild(numSpan);
                     btn.appendChild(iconSpan);
-                    btn.appendChild(document.createTextNode(label));
+                    btn.appendChild(document.createTextNode(this.getDisplayText(label).trim() || '—'));
                     btn.addEventListener('click', (e) => {
                         e.stopPropagation();
                         this.commitPendingBox(label, groupNames[t]);
@@ -4590,7 +4763,7 @@ class StoreLayoutViewer {
                 numSpan.className = 'label-picker-num';
                 numSpan.textContent = `${i + 1}`;
                 btn.appendChild(numSpan);
-                btn.appendChild(document.createTextNode(label));
+                btn.appendChild(document.createTextNode(this.getDisplayText(label).trim() || '—'));
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     this.commitPendingBox(label, '');
@@ -5012,12 +5185,18 @@ class StoreLayoutViewer {
     getSplitRegionLabel(leaf) {
         const attrs = leaf && leaf.attributes ? leaf.attributes : {};
         const parts = [];
-        if (attrs.regionType) parts.push(attrs.regionType);
-        if (attrs.category) parts.push(attrs.category);
+        const regionType = this.getDisplayText(attrs.regionType).trim();
+        if (regionType) parts.push(regionType);
+
+        const category = this.getDisplayText(attrs.category).trim();
+        if (category) parts.push(category);
+
         const subcategoryText = this.getSubcategoryDisplayText(attrs.subcategory);
         if (subcategoryText) parts.push(subcategoryText);
-        const aisle = attrs.aisle || attrs.notes;
+
+        const aisle = this.getDisplayText(attrs.aisle || attrs.notes).trim();
         if (aisle) parts.push(`Aisle ${aisle}`);
+
         const side = this.normalizeAisleDirection(attrs.side);
         if (side) parts.push(side);
         return parts.join(' · ') || 'Region';
@@ -5504,30 +5683,12 @@ class StoreLayoutViewer {
             }
         }
 
-        // Rotate annotation boxes (rotate center point, keep width/height unchanged)
-        for (const box of this.annotations) {
-            if (box.type === 'polygon') {
-                // Rotate polygon vertices
-                if (Array.isArray(box.vertices)) {
-                    for (const v of box.vertices) {
-                        const [nx, ny] = rotate(v[0], v[1]);
-                        v[0] = nx;
-                        v[1] = ny;
-                    }
-                }
-            } else {
-                const bcx = box.x + box.width / 2;
-                const bcy = box.y + box.height / 2;
-                const [ncx, ncy] = rotate(bcx, bcy);
-                box.x = ncx - box.width / 2;
-                box.y = ncy - box.height / 2;
-                // Sync per-bbox visual angle with the global layout rotation
-                box.angle = (((box.angle || 0) + angleDeg) % 360 + 360) % 360;
-            }
-        }
+        // Do not rotate user annotations here. Global map rotation only changes
+        // map data; existing bbox / split-bbox / polygon labels stay fixed.
 
         this.rotationAngle += angleDeg;
         this.hasUnsavedChanges = true;
+        this.hasUnsavedMapChanges = true;
         this.syncRotationSlider();
 
         // Update selected camera indicator to match rotated position
@@ -5749,10 +5910,10 @@ class StoreLayoutViewer {
         const labelEl = document.createElement('div');
         labelEl.className = 'annotation-label';
         // For aisle annotations, show the notes number directly on the bbox
-        let labelText = box.label || (box.id !== undefined ? `#${box.id}` : '');
+        let labelText = this.getDisplayText(box.label).trim() || (box.id !== undefined ? `#${box.id}` : '');
         if (box.type === 'split-bbox') labelText = '';
         if (box.attribute === 'aisle' && box.attributes) {
-            const notes = box.attributes.notes;
+            const notes = this.getDisplayText(box.attributes.notes).trim();
             const side = this.normalizeAisleDirection(box.attributes.side);
             if (notes != null && notes !== '') labelText = `Aisle ${notes}`;
             if (side) labelText = labelText ? `${labelText} · ${side}` : side;
@@ -5943,7 +6104,8 @@ class StoreLayoutViewer {
 
     deleteAnnotation(id) {
         const ann = this.annotations.find(a => a.id === id);
-        const name = ann && ann.label ? `"${ann.label}"` : `#${id}`;
+        const displayLabel = ann ? this.getDisplayText(ann.label).trim() : '';
+        const name = displayLabel ? `"${displayLabel}"` : `#${id}`;
         if (!confirm(`Delete annotation ${name}?`)) return;
         this.pushHistory();
         if (this.selectedAnnotation === id) this.selectedAnnotation = null;
@@ -6220,19 +6382,83 @@ class StoreLayoutViewer {
         // Yield to let GC run and allow browser to render "Saving…" button state
         await new Promise(r => setTimeout(r, 50));
 
+        const labelData = this.buildLabelDataPayload();
+        const mapData = this.buildMapDataPayload();
+        const shouldSaveMap = this.hasUnsavedMapChanges || this.mapDataNeedsInitialSave;
+
+        let labelGzipBytes;
+        let mapGzipBytes = null;
+        try {
+            labelGzipBytes = await this.gzipJsonPayload(labelData);
+            if (shouldSaveMap) {
+                mapGzipBytes = await this.gzipJsonPayload(mapData);
+            }
+        } catch (e) {
+            alert('Gzip compression not supported by this browser.');
+            return;
+        }
+
+        // Try to save directly to server. Map data is saved first so a legacy
+        // single-file store can safely migrate before the slim label file overwrites viewer_label.json.gz.
+        try {
+            if (shouldSaveMap) {
+                await this.saveGzippedPayload(MAP_DATA_FILE, mapGzipBytes);
+            }
+            await this.saveGzippedPayload(LABEL_DATA_FILE, labelGzipBytes);
+
+            const btn = document.getElementById('saveJsonBtn');
+            btn.textContent = '✓ Saved';
+            btn.style.color = 'green';
+            setTimeout(() => { btn.textContent = 'Save JSON'; btn.style.color = ''; }, 2000);
+            this.loadedMapFileName = MAP_DATA_FILE;
+            this.loadedLabelFileName = LABEL_DATA_FILE;
+            this.loadedDataFileName = LABEL_DATA_FILE;
+            this.mapDataNeedsInitialSave = false;
+            this.hasUnsavedMapChanges = false;
+            this.hasUnsavedChanges = false;
+            return;
+        } catch (e) {
+            // Server not running — fall through to download
+        }
+
+        // Fallback: download the gz files.
+        if (shouldSaveMap && mapGzipBytes) {
+            this.downloadGzipPayload(mapGzipBytes, MAP_DATA_FILE);
+        }
+        this.downloadGzipPayload(labelGzipBytes, LABEL_DATA_FILE);
+        this.mapDataNeedsInitialSave = false;
+        this.hasUnsavedMapChanges = false;
+        this.hasUnsavedChanges = false;
+    }
+
+    buildMapDataPayload() {
         const data = {
+            schemaVersion: 2,
+            dataKind: 'store_layout_map',
             pointCloud: this.pointCloud,
             cameras: this.cameras.map(cam => ({ ...cam })),
             mapAnnotations: this.mapAnnotations,
             metadata: this.metadata || {},
-            annotations: this.annotations.map(a => ({ ...a })),
             rotationApplied: this.rotationAngle,
+            updatedAt: new Date().toISOString(),
         };
 
-        // Preserve original fields
+        // Preserve original map-adjacent fields
         if (this.matchPairs.length > 0) data.matchPairs = this.matchPairs;
         if (this.trackPairs.length > 0) data.trackPairs = this.trackPairs;
         if (Object.keys(this.recogData).length > 0) data.recogData = this.recogData;
+
+        return data;
+    }
+
+    buildLabelDataPayload() {
+        const data = {
+            schemaVersion: 2,
+            dataKind: 'store_layout_annotations',
+            mapFile: MAP_DATA_FILE,
+            annotations: this.annotations.map(a => ({ ...a })),
+            savedAt: new Date().toISOString(),
+        };
 
         // Save calibration / scale bar data
         if (this.baseRatio !== null) {
@@ -6242,50 +6468,39 @@ class StoreLayoutViewer {
             };
         }
 
+        return data;
+    }
+
+    async gzipJsonPayload(data) {
         const json = JSON.stringify(data);
+        const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+        return await new Response(stream).arrayBuffer();
+    }
 
-        // Gzip compress
-        let gzipBytes;
-        try {
-            const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
-            gzipBytes = await new Response(stream).arrayBuffer();
-        } catch (e) {
-            alert('Gzip compression not supported by this browser.');
-            return;
+    async saveGzippedPayload(filename, gzipBytes) {
+        const saveUrl = this.saveBaseUrl + '/save-data?filename=' + encodeURIComponent(filename);
+        const resp = await fetch(saveUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/gzip' },
+            body: gzipBytes,
+        });
+        if (!resp.ok) {
+            const message = await resp.text().catch(() => resp.statusText);
+            throw new Error(`Failed to save ${filename}: ${message || resp.status}`);
         }
+        return await resp.json().catch(() => ({}));
+    }
 
-        // Try to save directly to server
-        const saveFileName = this.loadedDataFileName || this.getExportGzipFileNameByParentDir();
-        try {
-            const saveUrl = this.saveBaseUrl + '/save-data?filename=' + encodeURIComponent(saveFileName);
-            const resp = await fetch(saveUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/gzip' },
-                body: gzipBytes,
-            });
-            if (resp.ok) {
-                const btn = document.getElementById('saveJsonBtn');
-                btn.textContent = '✓ Saved';
-                btn.style.color = 'green';
-                setTimeout(() => { btn.textContent = 'Save JSON'; btn.style.color = ''; }, 2000);
-                this.hasUnsavedChanges = false;
-                return;
-            }
-        } catch (e) {
-            // Server not running — fall through to download
-        }
-
-        // Fallback: download the gz file (按 URL 上级目录名命名)
+    downloadGzipPayload(gzipBytes, filename) {
         const blob = new Blob([gzipBytes], { type: 'application/gzip' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = this.getExportGzipFileNameByParentDir();
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        this.hasUnsavedChanges = false;
     }
 
     // ========================================================================
@@ -6415,6 +6630,14 @@ class StoreLayoutViewer {
             document.getElementById('helpOverlay').classList.toggle('visible');
         });
 
+        const englishOnlyToggle = document.getElementById('englishOnlyToggle');
+        if (englishOnlyToggle) {
+            englishOnlyToggle.addEventListener('change', (e) => {
+                this.setEnglishOnly(e.target.checked);
+                e.target.blur();
+            });
+        }
+
         // Calibration mode toggle
         if (!this.readOnly) {
             document.getElementById('calibrateBtn').addEventListener('click', () => {
@@ -6511,6 +6734,10 @@ class StoreLayoutViewer {
                 const text = await file.text();
                 try {
                     const data = JSON.parse(text);
+                    this.loadedDataFileName = file.name || null;
+                    this.loadedMapFileName = null;
+                    this.loadedLabelFileName = file.name || null;
+                    this.mapDataNeedsInitialSave = this.hasEmbeddedMapData(data);
                     this.loadData(data);
                 } catch (err) {
                     alert('Failed to parse JSON: ' + err.message);
@@ -7502,7 +7729,8 @@ class StoreLayoutViewer {
         svg.appendChild(polygon);
 
         // Label text: boundary → top-left corner; others → centroid
-        if (ann.label) {
+        const displayLabel = this.getDisplayText(ann.label).trim();
+        if (displayLabel) {
             const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
             if (isBoundary) {
                 const bbMinX = Math.min(...screenVerts.map(v => v.x));
@@ -7527,7 +7755,7 @@ class StoreLayoutViewer {
             text.setAttribute('paint-order', 'stroke');
             text.setAttribute('stroke-width', '4');
             text.style.pointerEvents = 'none';
-            text.textContent = ann.label;
+            text.textContent = displayLabel;
             svg.appendChild(text);
         }
 
@@ -7697,7 +7925,9 @@ class StoreLayoutViewer {
             badge.style.background = theme.accentColor;
             badge.style.color = theme.labelTextColor || '#fff';
         }
-        badge.textContent = splitLeaf ? `${this.getSplitRegionLabel(splitLeaf)}` : (ann.label || `#${ann.id}`);
+        badge.textContent = splitLeaf
+            ? this.getSplitRegionLabel(splitLeaf)
+            : (this.getDisplayText(ann.label).trim() || `#${ann.id}`);
         content.appendChild(badge);
 
         if (splitLeaf) {
@@ -7782,11 +8012,13 @@ class StoreLayoutViewer {
         const splitRegionId = panel.dataset.splitRegionId || '';
         if (splitRegionId && ann.type === 'split-bbox') {
             const splitLeaf = this.findSplitLeaf(this.getSplitRoot(ann), splitRegionId);
-            badge.textContent = splitLeaf ? this.getSplitRegionLabel(splitLeaf) : (ann.label || `#${ann.id}`);
+            badge.textContent = splitLeaf
+                ? this.getSplitRegionLabel(splitLeaf)
+                : (this.getDisplayText(ann.label).trim() || `#${ann.id}`);
             return;
         }
 
-        badge.textContent = ann.label || `#${ann.id}`;
+        badge.textContent = this.getDisplayText(ann.label).trim() || `#${ann.id}`;
     }
 
     refreshAnnotationAttributeDisplay() {
@@ -7821,7 +8053,7 @@ class StoreLayoutViewer {
         for (const opt of values) {
             const o = document.createElement('option');
             o.value = opt;
-            o.textContent = opt;
+            o.textContent = this.getDisplayText(opt).trim() || '—';
             if (selectedValue === opt) o.selected = true;
             selectEl.appendChild(o);
         }
@@ -7877,7 +8109,7 @@ class StoreLayoutViewer {
             handleAfterChange,
             {
                 helpUrl: this.getTranslationTableUrl(),
-                helpTitle: '打开 Sub-category 中文翻译对照表',
+                helpTitle: 'Open Sub-category translation table',
             }
         );
         content.appendChild(subcategoryField);
@@ -7898,7 +8130,7 @@ class StoreLayoutViewer {
             helpLink.href = labelOptions.helpUrl;
             helpLink.target = '_blank';
             helpLink.rel = 'noopener noreferrer';
-            helpLink.title = labelOptions.helpTitle || '打开帮助';
+            helpLink.title = labelOptions.helpTitle || 'Open help';
             helpLink.textContent = '?';
             helpLink.addEventListener('click', (event) => event.stopPropagation());
             lbl.appendChild(helpLink);
@@ -7916,7 +8148,7 @@ class StoreLayoutViewer {
         inp.value = attrs[key] != null ? attrs[key] : '';
         if (inputType === 'number') { inp.min = '0'; inp.step = '1'; inp.style.width = '60px'; }
         if (inputType === 'aisle') {
-            inp.placeholder = '数字/字母';
+            inp.placeholder = this.englishOnly ? 'Numbers / letters' : '数字/字母';
             inp.style.width = '80px';
             inp.style.textTransform = 'uppercase';
             inp.addEventListener('input', () => { inp.value = inp.value.toUpperCase().replace(/[^0-9A-Z]/g, ''); });
@@ -7970,7 +8202,7 @@ class StoreLayoutViewer {
             checkbox.checked = normalizedSelected.includes(opt);
 
             const text = document.createElement('span');
-            text.textContent = opt;
+            text.textContent = this.getDisplayText(opt).trim() || '—';
 
             checkbox.addEventListener('change', () => {
                 const nextValues = Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))

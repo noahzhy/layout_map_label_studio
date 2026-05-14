@@ -8,7 +8,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe Ali', Roboto, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #f3ecd9;
             color: #352b1f;
             padding: 40px 20px;
@@ -63,15 +63,15 @@
 </head>
 <body>
     <div class="container">
-        <h1>🗺️ Store Layout 标注任务</h1>
+        <h1>🗺️ Store Layout Annotation Tasks</h1>
         <p class="subtitle">
-            {% if is_admin %}管理员视图 → 所有标注项目{% else %}我的标注项目{% endif %}
+            {% if is_admin %}Admin View → All Annotation Projects{% else %}My Annotation Projects{% endif %}
         </p>
 
         {% if is_admin %}
         <div class="admin-bar">
-            <span>通过 <a href="/admin/store_layout/layoutproject/add/" target="_blank">Django Admin → New Project</a> 创建项目并分配任务</span>
-            <a href="/admin/store_layout/" target="_blank">进入后台管理 →</a>
+            <span>Create projects and assign tasks via <a href="/admin/store_layout/layoutproject/add/" target="_blank">Django Admin → New Project</a></span>
+            <a href="/admin/store_layout/" target="_blank">Go to Admin Panel →</a>
         </div>
         {% endif %}
 
@@ -85,9 +85,9 @@
                     <div class="progress-bar">
                         <div class="progress-fill" style="width:{{ p.progress }}%"></div>
                     </div>
-                    <div class="progress-label">{{ p.done }} / {{ p.total }} 已完成（{{ p.progress }}%）</div>
+                    <div class="progress-label">{{ p.done }} / {{ p.total }} completed ({{ p.progress }}%)</div>
                 </div>
-                <div class="meta">创建于 {{ p.obj.created_at|date:"Y/m/d" }}
+                <div class="meta">Created on {{ p.obj.created_at|date:"Y/m/d" }}
                     {% if p.obj.created_by %} · {{ p.obj.created_by.email }}{% endif %}
                 </div>
             </a>
@@ -96,11 +96,11 @@
         {% else %}
         <div class="empty-state">
             {% if is_admin %}
-            <h2>暂无项目</h2>
-            <p>前往 <a href="/admin/store_layout/layoutproject/add/" style="color:#8a5a2b">Django Admin</a> 创建第一个项目</p>
+            <h2>No projects yet</h2>
+            <p>Go to <a href="/admin/store_layout/layoutproject/add/" style="color:#8a5a2b">Django Admin</a> to create your first project</p>
             {% else %}
-            <h2>暂无分配给您的项目</h2>
-            <p>请联系管理员为您创建并分配标注项目</p>
+            <h2>No projects assigned to you</h2>
+            <p>Please contact the administrator to create and assign annotation projects to you</p>
             {% endif %}
         </div>
         {% endif %}

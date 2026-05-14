@@ -3,7 +3,7 @@ description: Writing and updating cypress integration tests
 globs: 
 alwaysApply: false
 ---
-## Cypress Test Generation Rules for Label Studio
+## Cypress Test Generation Rules for Store Layout Map
 
 ### Project Structure and Organization
 
@@ -445,7 +445,7 @@ cy.get("body").type("{cmd}{+}"); // ❌ Platform-specific, prefer helpers
 
 **Helper Architecture Patterns:**
 
-Label Studio uses two main patterns for creating helpers:
+Store Layout Map uses two main patterns for creating helpers:
 
 1. **Static Object Pattern** (for singleton components):
 ```typescript

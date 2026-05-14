@@ -121,7 +121,7 @@ class Migration(migrations.Migration):
 ```  
 
 ## Other Important Points
-- Label Studio uses two databases: SQLite and Postgres. All migrations should be designed for both of 
+- Store Layout Map uses two databases: SQLite and Postgres. All migrations should be designed for both of 
 - Always use `CREATE INDEX CONCURRENTLY` and `DROP INDEX CONCURRENTLY` for non-blocking index operations in Postgres
 - Check `connection.vendor` to handle database differences (PostgreSQL vs SQLite/others)
 - SQLite doesn't support CONCURRENTLY, BRIN, GIN, or other PostgreSQL-specific features

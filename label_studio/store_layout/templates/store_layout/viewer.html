@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Store Layout Map</title>
-    <link rel="stylesheet" href="/static/store_layout/viewer.css?v=3">
+    <link rel="stylesheet" href="/static/store_layout/viewer.css?v=4">
 </head>
 <body>
     <div id="app">
@@ -46,12 +46,15 @@
                     <button type="button">{% if project %}← {{ project.name }}{% else %}← Projects{% endif %}</button>
                 </a>
                 {% if task %}
-                <button id="markDoneBtn"
-                    data-status="{{ task.status }}"
-                    style="background:{% if task.status == 'done' or task.status == 'reviewed' %}#68d391{% else %}#faf089{% endif %};color:#1a202c;font-weight:600;"
-                    title="完成标注并提交">
-                    {% if task.status == 'done' %}✓ 已完成{% elif task.status == 'reviewed' %}✓ 已审核{% else %}完成标注{% endif %}
-                </button>
+                <label title="Set annotation workflow status" style="display:flex;align-items:center;gap:6px;font-size:12px;color:#5c4d3b;font-weight:600;">
+                    Status
+                    <select id="taskStatusSelect" data-current-status="{{ task.status }}" style="height:28px;border:1px solid #c9b89e;border-radius:6px;background:#fdf6e8;color:#352b1f;font-weight:600;">
+                        {% for option in status_options %}
+                        <option value="{{ option.value }}" {% if option.value == task.status %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <span id="taskStatusMsg" style="display:none;font-size:12px;font-weight:600;"></span>
                 {% endif %}
                 <button id="helpBtn">?</button>
             </div>
@@ -188,8 +191,19 @@
                 <tr><td>X</td><td>Delete selected sub-region or annotation</td></tr>
                 <tr><td>Ctrl+Z / Ctrl+Y</td><td>Undo / Redo</td></tr>
                 <tr><td>L1–L5 buttons</td><td>Toggle layer visibility</td></tr>
+                <tr><td>Q / E or rotation slider</td><td>Rotate map data only; existing annotations stay fixed</td></tr>
                 <tr><td>Escape</td><td>Deselect / cancel polygon</td></tr>
             </table>
+            <div class="help-settings">
+                <h2>Display</h2>
+                <label class="help-toggle-row" for="englishOnlyToggle">
+                    <span class="help-toggle-copy">
+                        <span class="help-toggle-title">Mystery Mode</span>
+                        <span class="help-toggle-note">Display a cleaner view for annotations, regions, fields, and options.</span>
+                    </span>
+                    <input type="checkbox" id="englishOnlyToggle">
+                </label>
+            </div>
             <button class="close-help" onclick="document.getElementById('helpOverlay').classList.remove('visible')">Close</button>
         </div>
     </div>
@@ -224,37 +238,65 @@
         window.LAYOUT_LABELS_YAML_URL = '/static/store_layout/labels.yaml';
         window.LAYOUT_BUSINESS_L1_L2_YAML_URL = '/static/store_layout/business_l1_l2.yaml';
         window.LAYOUT_TRANSLATION_TABLE_URL = '{% url "store_layout:translation-table" %}';
+        window.LAYOUT_CSRF_TOKEN = '{{ csrf_token }}';
 
-        {% if task %}
-        // Mark-done handler
+        // Task status selector handler
         document.addEventListener('DOMContentLoaded', function () {
-            const btn = document.getElementById('markDoneBtn');
-            if (!btn) return;
-            const isDone = btn.dataset.status === 'done' || btn.dataset.status === 'reviewed';
-            if (isDone) { btn.disabled = true; return; }
-            btn.addEventListener('click', function () {
-                if (!confirm('确认完成标注并提交？')) return;
-                btn.disabled = true;
-                btn.textContent = '提交中...';
-                fetch('/store_layout/{{ store_id }}/mark-done', {
+            const select = document.getElementById('taskStatusSelect');
+            const msg = document.getElementById('taskStatusMsg');
+            if (!select) return;
+
+            const showStatusMessage = (text, ok = true) => {
+                if (!msg) return;
+                msg.textContent = text;
+                msg.style.display = '';
+                msg.style.color = ok ? '#2f855a' : '#c53030';
+                clearTimeout(showStatusMessage._timer);
+                showStatusMessage._timer = setTimeout(() => { msg.style.display = 'none'; }, 2200);
+            };
+
+            select.addEventListener('change', function () {
+                const previous = select.dataset.currentStatus || '';
+                const next = select.value;
+                select.disabled = true;
+                showStatusMessage('Saving status…', true);
+
+                fetch('/store_layout/{{ store_id }}/update-status', {
                     method: 'POST',
-                    headers: { 'X-CSRFToken': getCookie('csrftoken') },
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCsrfToken(),
+                    },
+                    body: JSON.stringify({ status: next }),
                 })
-                .then(r => r.json())
+                .then(async r => {
+                    const contentType = r.headers.get('content-type') || '';
+                    const isJson = contentType.includes('application/json');
+                    const payload = isJson ? await r.json() : { message: await r.text() };
+                    if (!r.ok) {
+                        throw new Error(formatStatusError(r.status, payload.message));
+                    }
+                    if (!isJson) {
+                        throw new Error('Unexpected server response. Please refresh the page and sign in again if needed.');
+                    }
+                    return payload;
+                })
                 .then(data => {
                     if (data.status === 'ok') {
-                        btn.textContent = '✓ 已完成';
-                        btn.style.background = '#68d391';
+                        select.dataset.currentStatus = data.task_status || next;
+                        showStatusMessage('Status saved', true);
                     } else {
-                        btn.disabled = false;
-                        btn.textContent = '完成标注';
-                        alert('提交失败: ' + (data.message || '未知错误'));
+                        select.value = previous;
+                        showStatusMessage('Save failed: ' + (data.message || 'Unknown error'), false);
                     }
                 })
-                .catch(() => {
-                    btn.disabled = false;
-                    btn.textContent = '完成标注';
-                    alert('网络错误，请重试');
+                .catch((error) => {
+                    select.value = previous;
+                    showStatusMessage('Save failed: ' + (error.message || 'Network error. Please try again.'), false);
+                })
+                .finally(() => {
+                    select.disabled = false;
                 });
             });
 
@@ -264,9 +306,19 @@
                 if (parts.length === 2) return parts.pop().split(';').shift();
                 return '';
             }
+
+            function getCsrfToken() {
+                return getCookie('csrftoken') || window.LAYOUT_CSRF_TOKEN || '';
+            }
+
+            function formatStatusError(status, message) {
+                if (status === 403) return 'Permission denied or CSRF token expired. Please refresh the page and try again.';
+                if (status === 404) return 'Status API not found. Please restart/redeploy the service with the latest nginx config.';
+                const plain = String(message || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                return plain ? plain.slice(0, 180) : `HTTP ${status}`;
+            }
         });
-        {% endif %}
     </script>
-    <script src="/static/store_layout/viewer.js?v=3"></script>
+    <script src="/static/store_layout/viewer.js?v=4"></script>
 </body>
 </html>

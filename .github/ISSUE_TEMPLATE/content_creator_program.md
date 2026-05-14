@@ -1,6 +1,6 @@
 ---
 name: Content creator program
-about: Contribute to the Label Studio Creators program. Pitch your idea by opening an issue.
+about: Contribute to the Store Layout Map Creators program. Pitch your idea by opening an issue.
 title: ''
 labels: 'issue: content-creator'
 assignees: 
@@ -13,7 +13,7 @@ assignees:
 
 **Personal bio / Experience**
 
-**Experience using Label Studio**
+**Experience using Store Layout Map**
 
 **Format**
 [ ] tutorial

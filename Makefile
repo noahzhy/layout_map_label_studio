@@ -68,7 +68,7 @@ test:
 build-testing-image:
 	docker build -t heartexlabs/label-studio:latest . && docker build -t heartexlabs/label-studio:latest-testing -f Dockerfile.testing .
 
-# Run an interactive shell inside a testing container. Label studio dir will be mounted as a volume
+# Run an interactive shell inside a testing container. Store Layout Map dir will be mounted as a volume
 # to avoid need for rebuilds. Run `make build-testing-image` first.
 docker-testing-shell:
 	docker run --volume ./label_studio:/label-studio/label_studio --volume ./mydata:/label-studio/data:rw -it heartexlabs/label-studio:latest-testing /bin/bash

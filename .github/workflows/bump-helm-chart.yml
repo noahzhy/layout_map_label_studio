@@ -4,13 +4,13 @@ on:
   workflow_call:
     inputs:
       docker_image_version:
-        description: 'Label Studio Docker Image version'
+        description: 'Store Layout Map Docker Image version'
         type: string
         required: true
   workflow_dispatch:
     inputs:
       docker_image_version:
-        description: 'Label Studio Docker Image version'
+        description: 'Store Layout Map Docker Image version'
         type: string
         required: true
 
@@ -38,7 +38,7 @@ jobs:
           repository: "${{ github.repository_owner }}/${{ env.HELM_CHART_REPO_NAME }}"
           token: ${{ secrets.GIT_PAT }}
 
-      - name: Edit Label Studio Chart
+      - name: Edit Store Layout Map Chart
         env:
           LS_CHART_PATH: ${{ env.LS_CHART_PATH }}
           DOCKER_IMAGE_VERSION: ${{ inputs.docker_image_version }}
@@ -56,5 +56,5 @@ jobs:
       - name: Commit and Push
         run: |
           git add "${LS_CHART_PATH}"
-          git commit -m 'Bump Label Studio to ${{ inputs.docker_image_version }}' -m 'Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          git commit -m 'Bump Store Layout Map to ${{ inputs.docker_image_version }}' -m 'Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
           git push origin

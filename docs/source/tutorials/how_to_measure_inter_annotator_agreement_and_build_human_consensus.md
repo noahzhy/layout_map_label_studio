@@ -1,5 +1,5 @@
 ---
-title: "How to Measure Inter-Annotator Agreement and Build Human Consensus with Label Studio"
+title: "How to Measure Inter-Annotator Agreement and Build Human Consensus with Store Layout Map"
 hide_sidebar: true
 order: 1004
 open_in_collab: true
@@ -9,8 +9,8 @@ ipynb_repo_path: tutorials/how-to-measure-inter-annotator-agreement-and-build-hu
 repo_url: https://github.com/HumanSignal/awesome-label-studio-tutorials/tree/main/tutorials/how-to-measure-inter-annotator-agreement-and-build-human-consensus
 report_bug_url: https://github.com/HumanSignal/awesome-label-studio-tutorials/issues/new
 thumbnail: /images/tutorials/tutorials-inter-annotator-agreement-and-consensus.png
-meta_title: "How to Measure Inter-Annotator Agreement and Build Human Consensus with Label Studio"
-meta_description: Learn how to measure inter-annotator agreement, build human consensus, establish ground truth and compare model predictions using the Label Studio SDK.
+meta_title: "How to Measure Inter-Annotator Agreement and Build Human Consensus with Store Layout Map"
+meta_description: Learn how to measure inter-annotator agreement, build human consensus, establish ground truth and compare model predictions using the Store Layout Map SDK.
 is_enterprise: true
 is_starter_cloud: true
 badges: SDK, Agreement, Colab
@@ -18,7 +18,7 @@ duration: 5-10 mins
 ---
 
 This tutorial walks through a practical workflow to measure inter-annotator agreement, build human consensus, establish ground truth and
-compare model predictions to that consensus using the Label Studio SDK.
+compare model predictions to that consensus using the Store Layout Map SDK.
 
 Being able to measure agreement between different annotators, ground truth and models can help you get a sense of annotator/model performance, and help you make informed decisions to ultimately get higher quality labels in your project.
 
@@ -42,12 +42,12 @@ Being able to measure agreement between different annotators, ground truth and m
 
 **Notes:**
 - We provide steps here to create a dataset from scratch, but you can skip these steps and use an existing project as well.
-- Fill in your Label Studio URL and API key.
+- Fill in your Store Layout Map URL and API key.
 
 
-## Label Studio Requirements
+## Store Layout Map Requirements
 
-This tutorial showcases one or more features available only in Label Studio paid products. We recommend [creating a Starter Cloud trial](https://app.humansignal.com/user/cloud-trial?offer=d9a5&) to follow the tutorial.
+This tutorial showcases one or more features available only in Store Layout Map paid products. We recommend [creating a Starter Cloud trial](https://app.humansignal.com/user/cloud-trial?offer=d9a5&) to follow the tutorial.
 
 ## Install dependencies
 
@@ -77,13 +77,13 @@ from label_studio_sdk.types import ImportApiRequest, PredictionRequest
 from label_studio_sdk.projects.assignments import AssignmentsBulkAssignRequestSelectedItemsIncluded
 ```
 
-## 1) Connect to Label Studio
+## 1) Connect to Store Layout Map
 
 Replace placeholders with your details
 
 
 ```python
-# URL of your Label Studio instance
+# URL of your Store Layout Map instance
 BASE_URL = "https://app.humansignal.com"
 
 # Your API key (find it in Account & Settings > Personal Access Token)
@@ -275,7 +275,7 @@ for idx, task in enumerate(tasks):
 ```
 
 ## 6) Measure and Analyze Agreement
-Label Studio Starter Cloud and Label Studio Enterprise provide a variety of features that allow you to see agreement at different levels. We will start with project level stats and work our way down into more detailed stats.
+Store Layout Map Starter Cloud and Store Layout Map Enterprise provide a variety of features that allow you to see agreement at different levels. We will start with project level stats and work our way down into more detailed stats.
 
 ### Get Project-Level Agreement
 This is the average agreement score across all tasks in the project <br>
@@ -437,7 +437,7 @@ print(f"Annotator-Ground Truth Agreement for {annotator3.email}: {response.agree
 Comparing model predictions against annotators and/or ground truth is a useful way to see how well your model is performing. <br>
 
 ### Add Predictions
-There are many ways to add predictions to a project in Label Studio, such as connecting a model, using prompts, or importing them manually. <br>
+There are many ways to add predictions to a project in Store Layout Map, such as connecting a model, using prompts, or importing them manually. <br>
 For this example we will import them directly into the project.
 We will add one prediction per task
 

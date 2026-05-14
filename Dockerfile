@@ -6,13 +6,13 @@ ARG BRANCH_OVERRIDE
 
 ################################ Overview
 
-# This Dockerfile builds a Label Studio environment.
+# This Dockerfile builds a Store Layout Map environment.
 # It consists of five main stages:
 # 1. "frontend-builder" - Compiles the frontend assets using Node.
 # 2. "frontend-version-generator" - Generates version files for frontend sources.
 # 3. "venv-builder" - Prepares the virtualenv environment.
 # 4. "py-version-generator" - Generates version files for python sources.
-# 5. "prod" - Creates the final production image with the Label Studio, Nginx, and other dependencies.
+# 5. "prod" - Creates the final production image with the Store Layout Map, Nginx, and other dependencies.
 
 ################################ Stage: frontend-builder (build frontend assets)
 FROM --platform=${BUILDPLATFORM} ccr.ccs.tencentyun.com/clobotics/node:${NODE_VERSION}-alpine AS frontend-builder
@@ -165,7 +165,7 @@ RUN set -eux; \
 
 COPY --chown=1001:0 deploy/default.conf /etc/nginx/nginx.conf
 
-# Copy essential files for installing Label Studio and its dependencies
+# Copy essential files for installing Store Layout Map and its dependencies
 COPY --chown=1001:0 pyproject.toml .
 COPY --chown=1001:0 poetry.lock .
 COPY --chown=1001:0 README.md .

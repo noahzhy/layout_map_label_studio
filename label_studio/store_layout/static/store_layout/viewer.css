@@ -978,8 +978,10 @@ input[type="checkbox"]:focus-visible {
     border: 1px solid var(--border-strong);
     border-radius: 8px;
     padding: 24px;
-    max-width: 400px;
-    width: 90%;
+    width: min(680px, 92vw);
+    max-width: 92vw;
+    max-height: 80vh;
+    overflow-y: auto;
 }
 
 #helpContent h2 {
@@ -1008,6 +1010,47 @@ input[type="checkbox"]:focus-visible {
 #helpContent .close-help {
     margin-top: 16px;
     width: 100%;
+}
+
+.help-settings {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(186, 167, 137, 0.6);
+}
+
+.help-toggle-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(243, 236, 217, 0.72);
+    cursor: pointer;
+}
+
+.help-toggle-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.help-toggle-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.help-toggle-note {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-muted);
+}
+
+.help-toggle-row input[type="checkbox"] {
+    margin-top: 2px;
+    flex-shrink: 0;
 }
 
 /* Recognition data bar (below image header) */

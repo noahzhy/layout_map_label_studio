@@ -17,6 +17,7 @@ urlpatterns = [
     path('store_layout/<str:store_id>/assets-metadata', views.store_assets, name='store-assets'),
     path('store_layout/<str:store_id>/save-data', views.save_data, name='save-data'),
     path('store_layout/<str:store_id>/mark-done', views.mark_done, name='mark-done'),
+    path('store_layout/<str:store_id>/update-status', views.update_status, name='update-status'),
     # Serve layout files (fallback when nginx is not fronting Django).
     # Must come AFTER the routes above so it doesn't shadow them.
     path('store_layout/<str:store_id>/<path:filename>', views.serve_file, name='serve-file'),

@@ -30,17 +30,23 @@ class LayoutProject(models.Model):
         return self.tasks.count()
 
     def done_count(self):
-        return self.tasks.filter(status__in=['done', 'reviewed']).count()
+        return self.tasks.filter(status__in=LayoutTask.completed_statuses()).count()
 
 
 class LayoutTask(models.Model):
     """Tracks assignment of a store layout labeling task to a specific annotator."""
 
     class Status(models.TextChoices):
-        PENDING = 'pending', '待标注'
-        IN_PROGRESS = 'in_progress', '标注中'
-        DONE = 'done', '已完成'
+        UNANNOTATED = 'unannotated', '未标注'
+        S1_IN_PROGRESS = 's1_in_progress', 'S1标注中'
+        S1_DONE = 's1_done', 'S1标注完成'
+        S2_IN_PROGRESS = 's2_in_progress', 'S2标注中'
+        S2_DONE = 's2_done', 'S2标注完成'
         REVIEWED = 'reviewed', '已审核'
+
+    @classmethod
+    def completed_statuses(cls):
+        return [cls.Status.S1_DONE, cls.Status.S2_DONE, cls.Status.REVIEWED]
 
     store_id = models.CharField(
         max_length=256,
@@ -74,7 +80,7 @@ class LayoutTask(models.Model):
     status = models.CharField(
         max_length=32,
         choices=Status.choices,
-        default=Status.PENDING,
+        default=Status.UNANNOTATED,
         db_index=True,
     )
     notes = models.TextField(blank=True, help_text='Admin notes about this task')

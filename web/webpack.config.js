@@ -20,7 +20,7 @@ const RELEASE = require("./release").getReleaseName();
 const css_prefix = "lsf-";
 const mode = process.env.BUILD_MODULE ? "production" : process.env.NODE_ENV || "development";
 const isDevelopment = mode !== "production";
-const devtool = process.env.NODE_ENV === "production" ? "source-map" : "cheap-module-source-map";
+const devtool = process.env.BUILD_NO_SOURCE_MAP ? false : process.env.NODE_ENV === "production" ? "source-map" : "cheap-module-source-map";
 const FRONTEND_HMR = process.env.FRONTEND_HMR === "true";
 const FRONTEND_HOSTNAME = FRONTEND_HMR ? process.env.FRONTEND_HOSTNAME || "http://localhost:8010" : "";
 const DJANGO_HOSTNAME = process.env.DJANGO_HOSTNAME || "http://localhost:8080";
@@ -216,12 +216,13 @@ module.exports = composePlugins(
       test: /libs[\\/]ui[\\/]src[\\/]assets[\\/]icons[\\/].*\.svg(\?.*)?$/,
       use: [
         {
-          loader: "@svgr/webpack",
+          loader: path.resolve(__dirname, "tools/loaders/safe-svgr-loader.cjs"),
           options: {
             ref: true,
             exportType: "named",
             namedExport: "ReactComponent",
             svgo: false,
+            throwIfNamespace: false,
           },
         },
         path.resolve(__dirname, "tools/loaders/svg-source-loader.cjs"),
@@ -237,12 +238,13 @@ module.exports = composePlugins(
           issuer: /\.[jt]sx?$/,
           use: [
             {
-              loader: "@svgr/webpack",
+              loader: path.resolve(__dirname, "tools/loaders/safe-svgr-loader.cjs"),
               options: {
                 ref: true,
                 exportType: "named",
                 namedExport: "ReactComponent",
                 svgo: false, // avoid parse errors with resolved svgo >=3.3.3
+                throwIfNamespace: false,
               },
             },
             path.resolve(__dirname, "tools/loaders/svg-source-loader.cjs"),
@@ -335,6 +337,12 @@ module.exports = composePlugins(
     };
 
     return merge(config, {
+      cache: {
+        type: "filesystem",
+        buildDependencies: {
+          config: [__filename],
+        },
+      },
       devtool,
       mode,
       plugins,

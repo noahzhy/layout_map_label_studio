@@ -20,10 +20,15 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 LAYOUT_DATA_DIR = os.path.join(settings.BASE_DATA_DIR, 'layout')
+ALLOWED_SAVE_FILENAMES = {'viewer_label.json.gz', 'viewer_map.json.gz'}
 
 
 def _is_admin(user):
     return user.is_staff or user.is_superuser
+
+
+def _status_options():
+    return [{'value': value, 'label': label} for value, label in LayoutTask.Status.choices]
 
 
 def _available_store_ids():
@@ -63,7 +68,7 @@ def index(request):
     for proj in projects:
         tasks = list(proj.tasks.all())
         total = len(tasks)
-        done = sum(1 for t in tasks if t.status in ('done', 'reviewed'))
+        done = sum(1 for t in tasks if t.status in LayoutTask.completed_statuses())
         project_list.append({
             'obj': proj,
             'total': total,
@@ -135,7 +140,7 @@ def project_detail(request, pk):
 
 @login_required
 def viewer_page(request, store_id):
-    """Render the Store Layout SPA. Checks access rights and advances task state."""
+    """Render the Store Layout SPA and check access rights."""
     if not re.match(r'^[\w\-]+$', store_id):
         return HttpResponse('Invalid store ID', status=400)
 
@@ -147,16 +152,12 @@ def viewer_page(request, store_id):
     if not _is_admin(request.user) and task is None:
         return HttpResponseForbidden('You are not assigned to this store.')
 
-    # Advance pending → in_progress on first open
-    if task and task.status == LayoutTask.Status.PENDING:
-        task.status = LayoutTask.Status.IN_PROGRESS
-        task.save(update_fields=['status', 'updated_at'])
-
     return render(request, 'store_layout/viewer.html', {
         'store_id': store_id,
         'data_base_url': f'/store_layout/{store_id}/',
         'task': task,
         'project': task.project if task else None,
+        'status_options': _status_options(),
     })
 
 
@@ -263,6 +264,8 @@ def save_data(request, store_id):
         return HttpResponse('Invalid filename', status=400)
     if not filename.endswith('.json.gz'):
         filename += '.json.gz'
+    if filename not in ALLOWED_SAVE_FILENAMES:
+        return HttpResponse('Unsupported filename', status=400)
 
     target_path = os.path.join(store_path, filename)
     real_store = os.path.realpath(store_path)
@@ -285,12 +288,10 @@ def save_data(request, store_id):
 
         logger.info(f'Saved layout data to {target_path} ({len(body)} bytes)')
 
-        # Update task status / timestamp
+        # Update task save timestamp only; annotators manage status explicitly from the viewer UI.
         LayoutTask.objects.filter(
             store_id=store_id, assigned_to=request.user,
-            status__in=[LayoutTask.Status.PENDING, LayoutTask.Status.IN_PROGRESS]
-        ).update(last_saved_at=timezone.now(), status=LayoutTask.Status.IN_PROGRESS,
-                 updated_at=timezone.now())
+        ).update(last_saved_at=timezone.now(), updated_at=timezone.now())
 
         return JsonResponse({'status': 'ok', 'filename': filename})
 
@@ -346,7 +347,7 @@ def serve_file(request, store_id, filename):
 @login_required
 @require_POST
 def mark_done(request, store_id):
-    """Mark the current user's LayoutTask for this store as done."""
+    """Backward-compatible shortcut: mark the task as S1 done."""
     if not re.match(r'^[\w\-]+$', store_id):
         return HttpResponse('Invalid store ID', status=400)
 
@@ -354,14 +355,56 @@ def mark_done(request, store_id):
     if not qs.exists() and not _is_admin(request.user):
         return JsonResponse({'status': 'error', 'message': 'Task not found'}, status=404)
 
-    updated = qs.exclude(status=LayoutTask.Status.REVIEWED).update(
-        status=LayoutTask.Status.DONE,
+    updated = qs.update(
+        status=LayoutTask.Status.S1_DONE,
         updated_at=timezone.now(),
     )
     if updated == 0:
-        return JsonResponse({'status': 'error', 'message': 'Nothing to update (already reviewed?)'}, status=409)
+        return JsonResponse({'status': 'error', 'message': 'Nothing to update'}, status=409)
 
-    return JsonResponse({'status': 'ok', 'store_id': store_id})
+    return JsonResponse({
+        'status': 'ok',
+        'store_id': store_id,
+        'task_status': LayoutTask.Status.S1_DONE,
+        'task_status_display': LayoutTask.Status.S1_DONE.label,
+    })
+
+
+@login_required
+@require_POST
+def update_status(request, store_id):
+    """Update the current annotator's LayoutTask status from the viewer page."""
+    if not re.match(r'^[\w\-]+$', store_id):
+        return HttpResponse('Invalid store ID', status=400)
+
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+
+    next_status = payload.get('status')
+    valid_statuses = {value for value, _ in LayoutTask.Status.choices}
+    if next_status not in valid_statuses:
+        return JsonResponse({'status': 'error', 'message': 'Invalid status'}, status=400)
+
+    task = LayoutTask.objects.filter(store_id=store_id, assigned_to=request.user).first()
+    if task is None:
+        if not _is_admin(request.user):
+            return JsonResponse({'status': 'error', 'message': 'Task not found'}, status=404)
+        task = LayoutTask.objects.filter(store_id=store_id).order_by('id').first()
+        if task is None:
+            return JsonResponse({'status': 'error', 'message': 'Task not found'}, status=404)
+
+    task.status = next_status
+    task.updated_at = timezone.now()
+    task.save(update_fields=['status', 'updated_at'])
+
+    return JsonResponse({
+        'status': 'ok',
+        'store_id': store_id,
+        'task_status': task.status,
+        'task_status_display': task.get_status_display(),
+    })
 
 
 # ── Assign tasks (admin only) ─────────────────────────────────────────────────
@@ -414,7 +457,7 @@ def assign_tasks(request, pk):
                 if existing.assigned_to_id != user.pk:
                     existing.assigned_to = user
                     existing.assigned_by = request.user
-                    existing.status = LayoutTask.Status.PENDING
+                    existing.status = LayoutTask.Status.UNANNOTATED
                     existing.last_saved_at = None
                     existing.updated_at = timezone.now()
                     existing.save()
@@ -425,7 +468,7 @@ def assign_tasks(request, pk):
                     store_id=store_id,
                     assigned_to=user,
                     assigned_by=request.user,
-                    status=LayoutTask.Status.PENDING,
+                    status=LayoutTask.Status.UNANNOTATED,
                 )
                 created_count += 1
 

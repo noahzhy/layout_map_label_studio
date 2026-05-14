@@ -1,5 +1,5 @@
 ---
-title: How to Review Langfuse Traces with Label Studio
+title: How to Review Langfuse Traces with Store Layout Map
 hide_sidebar: true
 order: 1008
 open_in_collab: true
@@ -9,18 +9,18 @@ ipynb_repo_path: tutorials/how-to-review-langfuse-traces-with-label-studio/how_t
 repo_url: https://github.com/HumanSignal/awesome-label-studio-tutorials/tree/main/tutorials/how-to-review-langfuse-traces-with-label-studio
 report_bug_url: https://github.com/HumanSignal/awesome-label-studio-tutorials/issues/new
 thumbnail: /images/tutorials/tutorials-review-langfuse-traces.png
-meta_title: How to Review Langfuse Traces with Label Studio
-meta_description: Learn how to pull Langfuse LLM traces into Label Studio Enterprise and annotate them with a custom ReactCode UI.
+meta_title: How to Review Langfuse Traces with Store Layout Map
+meta_description: Learn how to pull Langfuse LLM traces into Store Layout Map Enterprise and annotate them with a custom ReactCode UI.
 is_enterprise: true
 badges: SDK, Langfuse, LLM Observability, Eval, Agents, Colab
 duration: 10-15 mins
 ---
 
-## 0. Label Studio Requirements
+## 0. Store Layout Map Requirements
 
-This tutorial uses **ReactCode templates**, a feature available in **Label Studio Enterprise only**. ReactCode allows you to build fully custom React-based annotation interfaces — in this case, a 3-panel trace review UI. We recommend [connecting with our team](https://humansignal.com/contact-sales/) to request a trial or to enable them in your account.
+This tutorial uses **ReactCode templates**, a feature available in **Store Layout Map Enterprise only**. ReactCode allows you to build fully custom React-based annotation interfaces — in this case, a 3-panel trace review UI. We recommend [connecting with our team](https://humansignal.com/contact-sales/) to request a trial or to enable them in your account.
 
-After section 2, you will need a running Label Studio Enterprise instance and an API key from your account settings.
+After section 2, you will need a running Store Layout Map Enterprise instance and an API key from your account settings.
 
 
 ## 1. Installation & Setup
@@ -36,7 +36,7 @@ First, install the required dependencies:
 Create a `.env` file in the repository root (or the same directory as this notebook) with the following variables:
 
 ```bash
-# Label Studio Enterprise
+# Store Layout Map Enterprise
 LABEL_STUDIO_HOST=http://localhost:8080       # or your LS Enterprise instance URL
 LABEL_STUDIO_API_KEY=your_label_studio_api_key
 
@@ -44,7 +44,7 @@ LABEL_STUDIO_API_KEY=your_label_studio_api_key
 LANGFUSE_BASE_URL=https://cloud.langfuse.com  # or your self-hosted Langfuse URL
 LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
 LANGFUSE_SECRET_KEY=your_langfuse_secret_key
-LANGFUSE_PROJECT=your_project_name            # project name (for display in Label Studio)
+LANGFUSE_PROJECT=your_project_name            # project name (for display in Store Layout Map)
 
 # Anthropic (only needed for Section 3a sample trace generation)
 ANTHROPIC_API_KEY=your_anthropic_api_key
@@ -54,7 +54,7 @@ ANTHROPIC_API_KEY=your_anthropic_api_key
 
 **Langfuse Setup**: Visit [Langfuse Documentation](https://langfuse.com/docs) to create an account, generate an API key pair, and note your project's base URL.
 
-**Label Studio Setup**: Visit [Label Studio Documentation](https://labelstud.io/guide/access_tokens) for installation instructions and how to generate an API token from your account settings.
+**Store Layout Map Setup**: Visit [Store Layout Map Documentation](https://labelstud.io/guide/access_tokens) for installation instructions and how to generate an API token from your account settings.
 
 
 ```python
@@ -64,7 +64,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 load_dotenv(os.path.join(os.path.dirname(os.getcwd()), '.env'), override=True)
 
-# Label Studio Enterprise
+# Store Layout Map Enterprise
 LABEL_STUDIO_HOST = os.getenv('LABEL_STUDIO_HOST', 'http://localhost:8080')
 LABEL_STUDIO_API_KEY = os.getenv('LABEL_STUDIO_API_KEY', '')
 
@@ -86,36 +86,36 @@ print('Has ANTHROPIC_API_KEY?', bool(ANTHROPIC_API_KEY))
 ```
 ## Setup: The Evaluation Pipeline
 
-This tutorial connects Langfuse's engineering-centric observability tooling with Label Studio's expert evaluation interface:
+This tutorial connects Langfuse's engineering-centric observability tooling with Store Layout Map's expert evaluation interface:
 
 **Step 1: Trace Collection in Langfuse**
 - Langfuse captures LLM traces as typed observations (`GENERATION`, `TOOL`, `SPAN`, `CHAIN`)
 - Engineer-centric interface for debugging, scoring, and iteration
 - Project-scoped API keys make authentication straightforward — no project ID lookup needed
 
-**Step 2: Expert Evaluation in Label Studio**
-- Import traces from Langfuse into Label Studio as structured annotation tasks
+**Step 2: Expert Evaluation in Store Layout Map**
+- Import traces from Langfuse into Store Layout Map as structured annotation tasks
 - Domain experts evaluate each turn using the custom ReactCode UI
 - Collaborative workflow: multiple SMEs can annotate the same traces
 - Structured output feeds directly into quality reports, prompt improvements, and LLM-as-a-judge pipelines
 
 
-## 2. Label Studio ReactCode Config
+## 2. Store Layout Map ReactCode Config
 
 > **Skip the setup — clone the project directly**
 >
-> The pre-configured project below includes the full 3-panel ReactCode annotation interface ready to use. Click the button to clone it into your Label Studio Enterprise account and jump straight to importing your Langfuse traces in Section 4.
+> The pre-configured project below includes the full 3-panel ReactCode annotation interface ready to use. Click the button to clone it into your Store Layout Map Enterprise account and jump straight to importing your Langfuse traces in Section 4.
 >
 > <a href="https://app.humansignal.com/b/MTY1MQ==?p=e"
->   target="_blank" rel="noopener" aria-label="Open in Label Studio" style="all:unset;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;border:1px solid rgb(109,135,241);padding:8px 12px;background:rgb(87 108 193);color:white;font-weight:500;font-family:sans-serif;gap:6px;transition:background 0.2s ease;" onmouseover="this.style.background='rgb(97 122 218)'" onmouseout="this.style.background='rgb(87 108 193)'">
+>   target="_blank" rel="noopener" aria-label="Open in Store Layout Map" style="all:unset;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;border:1px solid rgb(109,135,241);padding:8px 12px;background:rgb(87 108 193);color:white;font-weight:500;font-family:sans-serif;gap:6px;transition:background 0.2s ease;" onmouseover="this.style.background='rgb(97 122 218)'" onmouseout="this.style.background='rgb(87 108 193)'">
 >   <svg style="width:20px;height:20px" viewBox="0 0 26 26" fill="none"><path fill="#FFBAAA" d="M3.5 4.5h19v18h-19z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M25.7 7.503h-7.087V5.147H7.588V2.792h11.025V.436H25.7v7.067Zm-18.112 0H5.225v10.994H2.863V7.503H.5V.436h7.088v7.067Zm0 18.061v-7.067H.5v7.067h7.088ZM25.7 18.497v7.067h-7.088v-2.356H7.588v-2.355h11.025v-2.356H25.7Zm-2.363 0V7.503h-2.363v10.994h2.363Z" fill="#FF7557"/></svg>
->   <span style="font-size:14px">Open in Label Studio</span>
+>   <span style="font-size:14px">Open in Store Layout Map</span>
 >   <svg style="width:16px;height:16px" viewBox="0 0 24 24"><path d="M14,3V5H17.59L7.76,14.83L9.17,16.24L19,6.41V10H21V3M19,19H5V5H12V3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V12H19V19Z" fill="white"/></svg>
 > </a>
 >
 > If you prefer to configure the project programmatically, follow the rest of this section.
 
-This tutorial uses a **ReactCode** label configuration — a Label Studio Enterprise feature that lets you embed a custom React component as your annotation interface.
+This tutorial uses a **ReactCode** label configuration — a Store Layout Map Enterprise feature that lets you embed a custom React component as your annotation interface.
 
 The UI has three panels:
 
@@ -170,7 +170,7 @@ If you already have traces in Langfuse, **skip this section** — set `GENERATE_
 
 Otherwise, this cell creates a ReAct agent with multiple tools and runs 4 multi-turn conversations using **Claude with extended thinking** to produce realistic traces in your Langfuse project. Requires `ANTHROPIC_API_KEY`.
 
-Extended thinking lets Claude reason through complex, ambiguous problems step-by-step before responding. The thinking content is captured in the trace and visible in the Label Studio UI.
+Extended thinking lets Claude reason through complex, ambiguous problems step-by-step before responding. The thinking content is captured in the trace and visible in the Store Layout Map UI.
 
 
 ```python
@@ -471,9 +471,9 @@ def normalize_langfuse_trace(trace, observations):
 
 print('✓ Normalization functions defined')
 ```
-## 6. Fetch, Normalize, and Import into Label Studio
+## 6. Fetch, Normalize, and Import into Store Layout Map
 
-Fetches traces from Langfuse, normalizes them, creates a Label Studio project with the ReactCode config, and imports the tasks.
+Fetches traces from Langfuse, normalizes them, creates a Store Layout Map project with the ReactCode config, and imports the tasks.
 
 
 ```python
@@ -541,9 +541,9 @@ print(f'\nDone! Open your project: {LABEL_STUDIO_HOST.rstrip("/")}/projects/{pro
 ## What's Next
 
 - **Start annotating**: Open the project link above and click through traces in the ReactCode UI
-- **Share with SMEs**: Invite domain experts to your Label Studio project for collaborative evaluation
+- **Share with SMEs**: Invite domain experts to your Store Layout Map project for collaborative evaluation
 - **Incremental sync**: Re-run sections 4–6 periodically to pull new traces
-- **Export annotations**: Use the Label Studio SDK or REST API to pull structured annotations for downstream analysis or fine-tuning
+- **Export annotations**: Use the Store Layout Map SDK or REST API to pull structured annotations for downstream analysis or fine-tuning
 - **Custom taxonomy**: Edit the `_TEMPLATE_JS` variable in the label config cell to add failure modes specific to your domain
 - **Braintrust / LangSmith**: See companion tutorials for other observability platforms
 
@@ -552,22 +552,22 @@ print(f'\nDone! Open your project: {LABEL_STUDIO_HOST.rstrip("/")}/projects/{pro
 
 This tutorial demonstrated the complete workflow from Langfuse traces to expert evaluation:
 
-1. ✓ Set up environment with Langfuse and Label Studio Enterprise
+1. ✓ Set up environment with Langfuse and Store Layout Map Enterprise
 2. ✓ Defined a ReactCode-based 3-panel annotation UI (Enterprise feature)
 3. ✓ Ran a multi-tool ReAct agent with Claude extended thinking — Langfuse captured traces via `CallbackHandler`
 4. ✓ Fetched traces from Langfuse using the REST API with Basic Auth
 5. ✓ Normalized typed observations (`GENERATION`, `TOOL`) into a unified trace schema
-6. ✓ Created a Label Studio project and imported traces as annotation tasks
+6. ✓ Created a Store Layout Map project and imported traces as annotation tasks
 
 ### Key Takeaway
 
-Langfuse excels at typed observation storage and project-scoped API access during development. Label Studio Enterprise provides the collaborative, expert-driven evaluation framework — with the ReactCode interface giving domain experts an intuitive turn-by-turn review experience. The two tools complement each other throughout the AI development lifecycle.
+Langfuse excels at typed observation storage and project-scoped API access during development. Store Layout Map Enterprise provides the collaborative, expert-driven evaluation framework — with the ReactCode interface giving domain experts an intuitive turn-by-turn review experience. The two tools complement each other throughout the AI development lifecycle.
 
 
 ## References
 
 - [Langfuse](https://langfuse.com/docs)
-- [Label Studio](https://docs.humansignal.com/guide/)
-- [Label Studio ReactCode Templates](https://docs.humansignal.com/guide/react_code)
-- [Label Studio SDK](https://labelstud.io/sdk/)
+- [Store Layout Map](https://docs.humansignal.com/guide/)
+- [Store Layout Map ReactCode Templates](https://docs.humansignal.com/guide/react_code)
+- [Store Layout Map SDK](https://labelstud.io/sdk/)
 - [Companion tutorials: Braintrust](how_to_review_braintrust_traces_with_label_studio.html) | [LangSmith](how_to_review_langsmith_traces_with_label_studio.html)

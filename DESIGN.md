@@ -1,4 +1,4 @@
-# Label Studio Design System
+# Store Layout Map Design System
 
 ## Table of Contents
 
