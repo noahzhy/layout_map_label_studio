@@ -10,6 +10,8 @@
 // Map zoom limits (easy to tune)
 const MAP_MIN_ZOOM = 0.1;
 const MAP_MAX_ZOOM = 25.0;
+const MAP_DATA_FILE = 'viewer_map.json.gz';
+const LABEL_DATA_FILE = 'viewer_label.json.gz';
 const CHINESE_TEXT_REGEX = /[\u3400-\u9fff\uf900-\ufaff]/u;
 const CHINESE_TEXT_REGEX_GLOBAL = /[\u3400-\u9fff\uf900-\ufaff]/gu;
 
@@ -311,8 +313,12 @@ class StoreLayoutViewer {
         this.baseRatio = null;          // real distance per world unit
         this.calibrationUnit = 'm';
 
-        // Loaded data file name (for save-back)
+        // Loaded data file names (for save-back / split map-label storage)
         this.loadedDataFileName = null;
+        this.loadedMapFileName = null;
+        this.loadedLabelFileName = null;
+        this.mapDataNeedsInitialSave = false;
+        this.hasUnsavedMapChanges = false;
 
         // Performance: flat Float32Array for GPU upload (avoids flat() on every upload)
         this.pointCloudBuffer = new Float32Array(0);
@@ -515,21 +521,41 @@ class StoreLayoutViewer {
     async tryAutoLoad() {
         const base = this.dataBaseUrl;
         try {
+            try {
+                const mapData = await this.fetchGzippedJson(base + MAP_DATA_FILE);
+                let labelData = {};
+                try {
+                    labelData = await this.fetchGzippedJson(base + LABEL_DATA_FILE);
+                } catch (labelError) {
+                    console.warn('No separate label data found; loading map data only:', labelError);
+                }
+
+                this.loadedMapFileName = MAP_DATA_FILE;
+                this.loadedLabelFileName = LABEL_DATA_FILE;
+                this.loadedDataFileName = LABEL_DATA_FILE;
+                this.mapDataNeedsInitialSave = false;
+                this.loadData(this.mergeMapAndLabelData(mapData, labelData));
+                this.handleUrlParams();
+                return;
+            } catch (mapError) {
+                // New split storage is not available yet; fall back to legacy single-file data below.
+            }
+
             // Find the newest viewer_*.json.gz file by Last-Modified time
-            let dataUrl = base + 'viewer_label.json.gz';
+            let dataUrl = base + LABEL_DATA_FILE;
             try {
                 const listResp = await fetch(base);
                 if (listResp.ok) {
                     const text = await listResp.text();
                     const matches = text.match(/viewer_.*?\.json\.gz/g);
                     if (matches && matches.length > 0) {
-                        const taskFiles = [...new Set(matches)].filter(f => f !== 'viewer_label.json.gz');
+                        const taskFiles = [...new Set(matches)].filter(f => f !== LABEL_DATA_FILE && f !== MAP_DATA_FILE);
 
                         if (taskFiles.length > 0) {
                             taskFiles.sort().reverse();
                             dataUrl = base + taskFiles[0];
                         } else {
-                            dataUrl = base + 'viewer_label.json.gz'; // 只有没找到任务文件时才用默认的
+                            dataUrl = base + LABEL_DATA_FILE; // 只有没找到任务文件时才用默认的
                         }
                     }
                 }
@@ -537,6 +563,9 @@ class StoreLayoutViewer {
 
             this.loadedDataFileName = dataUrl.split('/').pop();
             const data = await this.fetchGzippedJson(dataUrl);
+            this.loadedMapFileName = null;
+            this.loadedLabelFileName = LABEL_DATA_FILE;
+            this.mapDataNeedsInitialSave = this.hasEmbeddedMapData(data);
             this.loadData(data);
             this.handleUrlParams();
         } catch (e) {
@@ -550,6 +579,38 @@ class StoreLayoutViewer {
         } catch (e) {
             // No detections available
         }
+    }
+
+    hasEmbeddedMapData(data) {
+        return Boolean(
+            data &&
+            typeof data === 'object' &&
+            (Array.isArray(data.pointCloud) || Array.isArray(data.cameras) || data.metadata)
+        );
+    }
+
+    mergeMapAndLabelData(mapData = {}, labelData = {}) {
+        const merged = { ...(mapData || {}) };
+        const label = labelData || {};
+
+        for (const [key, value] of Object.entries(label)) {
+            if (['pointCloud', 'cameras', 'mapAnnotations', 'matchPairs', 'trackPairs', 'recogData'].includes(key)) {
+                continue;
+            }
+            if (key === 'metadata') {
+                merged.metadata = { ...(mapData.metadata || {}), ...(value || {}) };
+                continue;
+            }
+            if (key === 'rotationApplied' && typeof mapData.rotationApplied === 'number') {
+                continue;
+            }
+            merged[key] = value;
+        }
+
+        if (!Array.isArray(merged.annotations)) {
+            merged.annotations = [];
+        }
+        return merged;
     }
 
     getImageStem(name) {
@@ -980,6 +1041,7 @@ class StoreLayoutViewer {
         }
 
         this.hasUnsavedChanges = false;
+        this.hasUnsavedMapChanges = false;
         this.syncRotationSlider();
 
         const storeName = this.metadata.storeName ? String(this.metadata.storeName).trim() : '';
@@ -3943,6 +4005,7 @@ class StoreLayoutViewer {
         this.updateOverlayPulseAnimationState();
         this.updateVisibleCameras();
         this.hasUnsavedChanges = true;
+        this.hasUnsavedMapChanges = true;
         this.render();
 
         // Select the newly added companion
@@ -3966,6 +4029,7 @@ class StoreLayoutViewer {
         this.updateOverlayPulseAnimationState();
         this.updateVisibleCameras();
         this.hasUnsavedChanges = true;
+        this.hasUnsavedMapChanges = true;
         this.render();
     }
 
@@ -5619,30 +5683,12 @@ class StoreLayoutViewer {
             }
         }
 
-        // Rotate annotation boxes (rotate center point, keep width/height unchanged)
-        for (const box of this.annotations) {
-            if (box.type === 'polygon') {
-                // Rotate polygon vertices
-                if (Array.isArray(box.vertices)) {
-                    for (const v of box.vertices) {
-                        const [nx, ny] = rotate(v[0], v[1]);
-                        v[0] = nx;
-                        v[1] = ny;
-                    }
-                }
-            } else {
-                const bcx = box.x + box.width / 2;
-                const bcy = box.y + box.height / 2;
-                const [ncx, ncy] = rotate(bcx, bcy);
-                box.x = ncx - box.width / 2;
-                box.y = ncy - box.height / 2;
-                // Sync per-bbox visual angle with the global layout rotation
-                box.angle = (((box.angle || 0) + angleDeg) % 360 + 360) % 360;
-            }
-        }
+        // Do not rotate user annotations here. Global map rotation only changes
+        // map data; existing bbox / split-bbox / polygon labels stay fixed.
 
         this.rotationAngle += angleDeg;
         this.hasUnsavedChanges = true;
+        this.hasUnsavedMapChanges = true;
         this.syncRotationSlider();
 
         // Update selected camera indicator to match rotated position
@@ -6336,19 +6382,83 @@ class StoreLayoutViewer {
         // Yield to let GC run and allow browser to render "Saving…" button state
         await new Promise(r => setTimeout(r, 50));
 
+        const labelData = this.buildLabelDataPayload();
+        const mapData = this.buildMapDataPayload();
+        const shouldSaveMap = this.hasUnsavedMapChanges || this.mapDataNeedsInitialSave;
+
+        let labelGzipBytes;
+        let mapGzipBytes = null;
+        try {
+            labelGzipBytes = await this.gzipJsonPayload(labelData);
+            if (shouldSaveMap) {
+                mapGzipBytes = await this.gzipJsonPayload(mapData);
+            }
+        } catch (e) {
+            alert('Gzip compression not supported by this browser.');
+            return;
+        }
+
+        // Try to save directly to server. Map data is saved first so a legacy
+        // single-file store can safely migrate before the slim label file overwrites viewer_label.json.gz.
+        try {
+            if (shouldSaveMap) {
+                await this.saveGzippedPayload(MAP_DATA_FILE, mapGzipBytes);
+            }
+            await this.saveGzippedPayload(LABEL_DATA_FILE, labelGzipBytes);
+
+            const btn = document.getElementById('saveJsonBtn');
+            btn.textContent = '✓ Saved';
+            btn.style.color = 'green';
+            setTimeout(() => { btn.textContent = 'Save JSON'; btn.style.color = ''; }, 2000);
+            this.loadedMapFileName = MAP_DATA_FILE;
+            this.loadedLabelFileName = LABEL_DATA_FILE;
+            this.loadedDataFileName = LABEL_DATA_FILE;
+            this.mapDataNeedsInitialSave = false;
+            this.hasUnsavedMapChanges = false;
+            this.hasUnsavedChanges = false;
+            return;
+        } catch (e) {
+            // Server not running — fall through to download
+        }
+
+        // Fallback: download the gz files.
+        if (shouldSaveMap && mapGzipBytes) {
+            this.downloadGzipPayload(mapGzipBytes, MAP_DATA_FILE);
+        }
+        this.downloadGzipPayload(labelGzipBytes, LABEL_DATA_FILE);
+        this.mapDataNeedsInitialSave = false;
+        this.hasUnsavedMapChanges = false;
+        this.hasUnsavedChanges = false;
+    }
+
+    buildMapDataPayload() {
         const data = {
+            schemaVersion: 2,
+            dataKind: 'store_layout_map',
             pointCloud: this.pointCloud,
             cameras: this.cameras.map(cam => ({ ...cam })),
             mapAnnotations: this.mapAnnotations,
             metadata: this.metadata || {},
-            annotations: this.annotations.map(a => ({ ...a })),
             rotationApplied: this.rotationAngle,
+            updatedAt: new Date().toISOString(),
         };
 
-        // Preserve original fields
+        // Preserve original map-adjacent fields
         if (this.matchPairs.length > 0) data.matchPairs = this.matchPairs;
         if (this.trackPairs.length > 0) data.trackPairs = this.trackPairs;
         if (Object.keys(this.recogData).length > 0) data.recogData = this.recogData;
+
+        return data;
+    }
+
+    buildLabelDataPayload() {
+        const data = {
+            schemaVersion: 2,
+            dataKind: 'store_layout_annotations',
+            mapFile: MAP_DATA_FILE,
+            annotations: this.annotations.map(a => ({ ...a })),
+            savedAt: new Date().toISOString(),
+        };
 
         // Save calibration / scale bar data
         if (this.baseRatio !== null) {
@@ -6358,50 +6468,39 @@ class StoreLayoutViewer {
             };
         }
 
+        return data;
+    }
+
+    async gzipJsonPayload(data) {
         const json = JSON.stringify(data);
+        const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+        return await new Response(stream).arrayBuffer();
+    }
 
-        // Gzip compress
-        let gzipBytes;
-        try {
-            const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
-            gzipBytes = await new Response(stream).arrayBuffer();
-        } catch (e) {
-            alert('Gzip compression not supported by this browser.');
-            return;
+    async saveGzippedPayload(filename, gzipBytes) {
+        const saveUrl = this.saveBaseUrl + '/save-data?filename=' + encodeURIComponent(filename);
+        const resp = await fetch(saveUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/gzip' },
+            body: gzipBytes,
+        });
+        if (!resp.ok) {
+            const message = await resp.text().catch(() => resp.statusText);
+            throw new Error(`Failed to save ${filename}: ${message || resp.status}`);
         }
+        return await resp.json().catch(() => ({}));
+    }
 
-        // Try to save directly to server
-        const saveFileName = this.loadedDataFileName || this.getExportGzipFileNameByParentDir();
-        try {
-            const saveUrl = this.saveBaseUrl + '/save-data?filename=' + encodeURIComponent(saveFileName);
-            const resp = await fetch(saveUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/gzip' },
-                body: gzipBytes,
-            });
-            if (resp.ok) {
-                const btn = document.getElementById('saveJsonBtn');
-                btn.textContent = '✓ Saved';
-                btn.style.color = 'green';
-                setTimeout(() => { btn.textContent = 'Save JSON'; btn.style.color = ''; }, 2000);
-                this.hasUnsavedChanges = false;
-                return;
-            }
-        } catch (e) {
-            // Server not running — fall through to download
-        }
-
-        // Fallback: download the gz file (按 URL 上级目录名命名)
+    downloadGzipPayload(gzipBytes, filename) {
         const blob = new Blob([gzipBytes], { type: 'application/gzip' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = this.getExportGzipFileNameByParentDir();
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        this.hasUnsavedChanges = false;
     }
 
     // ========================================================================
@@ -6635,6 +6734,10 @@ class StoreLayoutViewer {
                 const text = await file.text();
                 try {
                     const data = JSON.parse(text);
+                    this.loadedDataFileName = file.name || null;
+                    this.loadedMapFileName = null;
+                    this.loadedLabelFileName = file.name || null;
+                    this.mapDataNeedsInitialSave = this.hasEmbeddedMapData(data);
                     this.loadData(data);
                 } catch (err) {
                     alert('Failed to parse JSON: ' + err.message);

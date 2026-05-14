@@ -27,7 +27,7 @@ class LayoutProjectAdmin(admin.ModelAdmin):
     task_count.short_description = '任务数'
 
     def done_count(self, obj):
-        return obj.tasks.filter(status__in=['done', 'reviewed']).count()
+        return obj.tasks.filter(status__in=LayoutTask.completed_statuses()).count()
     done_count.short_description = '已完成'
 
 

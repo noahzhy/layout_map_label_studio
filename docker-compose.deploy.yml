@@ -6,7 +6,8 @@
 #  ./data/                          /label-studio/data/
 #  ├── layout/                          layout/
 #  │   └── <store_id>/                  └── <store_id>/
-#  │       ├── viewer_label.json.gz         ├── viewer_label.json.gz  ← 必须
+#  │       ├── viewer_map.json.gz           ├── viewer_map.json.gz    ← 地图点云/相机/元数据（推荐新格式）
+#  │       ├── viewer_label.json.gz         ├── viewer_label.json.gz  ← 标注数据（必须；旧格式可自动迁移）
 #  │       ├── detections.json.gz           ├── detections.json.gz    ← 可选（人脸模糊）
 #  │       ├── images/                      ├── images/               ← 相机图片
 #  │       └── thumbnails/                  └── thumbnails/           ← 缩略图
@@ -19,6 +20,7 @@
 #   1. 复制 .env.deploy 为 .env 并按需修改
 #   2. mkdir -p ./data/layout
 #   3. 把门店文件夹复制到 ./data/layout/<store_id>/
+#      新格式建议包含 viewer_map.json.gz + viewer_label.json.gz；旧版全量 viewer_label.json.gz 仍可读取并在首次保存时拆分
 #   4. docker compose -f docker-compose.deploy.yml up -d
 # ────────────────────────────────────────────────────────────────────────────
 

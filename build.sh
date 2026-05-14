@@ -34,16 +34,40 @@ export DOCKER_BUILDKIT=1
 BUILD_CACHE="${BUILD_CACHE:-1}"
 BUILD_CACHE_DIR="${BUILD_CACHE_DIR:-.buildx-cache}"
 BUILD_CACHE_NEXT_DIR="${BUILD_CACHE_DIR}.new"
+BUILDX_BUILDER="${BUILDX_BUILDER:-storebev-buildx}"
 
 CACHE_ARGS=()
+BUILDER_ARGS=()
 if [[ "$BUILD_CACHE" != "0" ]]; then
-    mkdir -p "$BUILD_CACHE_DIR"
-    rm -rf "$BUILD_CACHE_NEXT_DIR"
-    CACHE_ARGS=(
-        --cache-from "type=local,src=$BUILD_CACHE_DIR"
-        --cache-to "type=local,dest=$BUILD_CACHE_NEXT_DIR,mode=max"
-    )
-    echo "▶ 已启用 buildx 本地缓存：$BUILD_CACHE_DIR"
+    # Docker Desktop 默认的 docker driver 不支持 --cache-to 导出本地缓存。
+    # 使用 docker-container builder 可支持本地缓存导入/导出，并且仍可配合 --load 使用。
+    if ! docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1; then
+        echo "▶ 创建 buildx builder：$BUILDX_BUILDER"
+        if ! docker buildx create --name "$BUILDX_BUILDER" --driver docker-container >/dev/null; then
+            echo "⚠ 创建 buildx 缓存 builder 失败，自动退回无缓存构建"
+            BUILD_CACHE=0
+        fi
+    fi
+
+    BUILDX_DRIVER=$(docker buildx inspect "$BUILDX_BUILDER" 2>/dev/null | awk '/^Driver:/ { print $2; exit }' || true)
+    if [[ "$BUILD_CACHE" != "0" && "$BUILDX_DRIVER" != "docker-container" ]]; then
+        echo "⚠ buildx builder '$BUILDX_BUILDER' 使用 $BUILDX_DRIVER driver，不支持本地缓存导出，自动退回无缓存构建"
+        BUILD_CACHE=0
+    fi
+
+    if [[ "$BUILD_CACHE" != "0" ]] && docker buildx inspect "$BUILDX_BUILDER" --bootstrap >/dev/null 2>&1; then
+        mkdir -p "$BUILD_CACHE_DIR"
+        rm -rf "$BUILD_CACHE_NEXT_DIR"
+        BUILDER_ARGS=(--builder "$BUILDX_BUILDER")
+        CACHE_ARGS=(
+            --cache-from "type=local,src=$BUILD_CACHE_DIR"
+            --cache-to "type=local,dest=$BUILD_CACHE_NEXT_DIR,mode=max"
+        )
+        echo "▶ 已启用 buildx 本地缓存：$BUILD_CACHE_DIR"
+    else
+        echo "⚠ 无法启动 buildx 缓存 builder，自动退回无缓存构建"
+        BUILD_CACHE=0
+    fi
 fi
 
 # ─── 同步 .env ─────────────────────────────────────────────────────────────
@@ -57,6 +81,7 @@ fi
 echo ""
 echo "▶ 开始构建..."
 docker buildx build \
+    "${BUILDER_ARGS[@]}" \
     --platform linux/amd64 \
     --tag "$IMAGE" \
     --load \
