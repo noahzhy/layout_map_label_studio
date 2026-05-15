@@ -1312,6 +1312,10 @@ input[type="checkbox"]:focus-visible {
     min-width: 60px;
 }
 
+.attr-field--searchable {
+    gap: 5px;
+}
+
 .attr-field label {
     font-size: 11px;
     color: var(--text-muted);
@@ -1354,6 +1358,19 @@ input[type="checkbox"]:focus-visible {
     width: 100%;
 }
 
+.attr-search-input {
+    padding: 4px 8px;
+    font-size: 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: rgba(255, 250, 240, 0.98);
+    color: var(--text-primary);
+}
+
+.attr-search-input::placeholder {
+    color: var(--text-muted);
+}
+
 .attr-field--multiselect {
     min-width: 120px;
 }
@@ -1391,9 +1408,11 @@ input[type="checkbox"]:focus-visible {
 }
 
 .attr-field input:not([type="checkbox"]):focus,
-.attr-field select:focus {
+.attr-field select:focus,
+.attr-search-input:focus {
     outline: none;
     border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(184, 132, 71, 0.12);
 }
 
 .attr-label-header {

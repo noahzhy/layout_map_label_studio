@@ -1,3 +1,4 @@
+import base64
 import gzip
 import json
 import logging
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 LAYOUT_DATA_DIR = os.path.join(settings.BASE_DATA_DIR, 'layout')
 ALLOWED_SAVE_FILENAMES = {'viewer_label.json.gz', 'viewer_map.json.gz'}
+ALLOWED_EXPORT_FILENAMES = {'store-metadata.json'}
 
 
 def _is_admin(user):
@@ -233,6 +235,97 @@ def store_assets(request, store_id):
     })
     response['Cache-Control'] = 'no-cache, must-revalidate'
     return response
+
+
+def _can_access_store(user, store_id):
+    """Return True when *user* may access a Store Layout task directory."""
+    if _is_admin(user):
+        return True
+    return LayoutTask.objects.filter(store_id=store_id, assigned_to=user).exists()
+
+
+def _safe_store_path(store_id):
+    """Validate *store_id* and return its on-disk directory path."""
+    if not re.match(r'^[\w\-]+$', store_id):
+        return None, HttpResponse('Invalid store ID', status=400)
+
+    store_path = os.path.join(LAYOUT_DATA_DIR, store_id)
+    if not os.path.isdir(store_path):
+        return None, HttpResponse('Store not found', status=404)
+    return store_path, None
+
+
+def _is_allowed_export_filename(filename):
+    """Restrict export saves to DoorDash SVG + companion metadata files."""
+    if not re.match(r'^[\w\-\.]+$', filename):
+        return False
+    return filename.endswith('.svg') or filename.endswith('.html') or filename.endswith('.zip') or filename in ALLOWED_EXPORT_FILENAMES
+
+
+@csrf_exempt
+def save_export(request, store_id):
+    """Save generated SVG/metadata exports back to the store directory."""
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+
+    if not request.user.is_authenticated:
+        return HttpResponse('Unauthorized', status=401)
+
+    store_path, error = _safe_store_path(store_id)
+    if error is not None:
+        return error
+
+    if not _can_access_store(request.user, store_id):
+        return HttpResponseForbidden('Not assigned to this store.')
+
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+
+    filename = os.path.basename(str(payload.get('filename', '')).strip())
+    content = payload.get('content')
+    content_base64 = payload.get('content_base64')
+    if not filename:
+        return JsonResponse({'status': 'error', 'message': 'Missing filename'}, status=400)
+    if not _is_allowed_export_filename(filename):
+        return JsonResponse({'status': 'error', 'message': 'Unsupported export filename'}, status=400)
+    if not isinstance(content, str) and not isinstance(content_base64, str):
+        return JsonResponse({'status': 'error', 'message': 'Missing export content'}, status=400)
+
+    target_path = os.path.join(store_path, filename)
+    real_store = os.path.realpath(store_path)
+    real_target = os.path.realpath(target_path)
+    if not real_target.startswith(real_store + os.sep):
+        return JsonResponse({'status': 'error', 'message': 'Invalid path'}, status=400)
+
+    try:
+        if isinstance(content_base64, str):
+            try:
+                binary_content = base64.b64decode(content_base64, validate=True)
+            except (ValueError, base64.binascii.Error):
+                return JsonResponse({'status': 'error', 'message': 'Invalid base64 content'}, status=400)
+            if not binary_content:
+                return JsonResponse({'status': 'error', 'message': 'Missing export content'}, status=400)
+            with open(real_target, 'wb') as f:
+                f.write(binary_content)
+            content_size = len(binary_content)
+        else:
+            if not content.strip():
+                return JsonResponse({'status': 'error', 'message': 'Missing export content'}, status=400)
+            with open(real_target, 'w', encoding='utf-8') as f:
+                f.write(content)
+            content_size = len(content)
+
+        logger.info('Saved layout export to %s (%s bytes/chars)', real_target, content_size)
+        LayoutTask.objects.filter(
+            store_id=store_id, assigned_to=request.user,
+        ).update(last_saved_at=timezone.now(), updated_at=timezone.now())
+
+        return JsonResponse({'status': 'ok', 'filename': filename})
+    except OSError as exc:
+        logger.error('Failed to save layout export for %s: %s', store_id, exc)
+        return JsonResponse({'status': 'error', 'message': f'Save failed: {exc}'}, status=500)
 
 
 # ── Save data ────────────────────────────────────────────────────────────────

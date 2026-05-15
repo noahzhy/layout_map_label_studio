@@ -187,6 +187,7 @@
                 <tr><td>Click near start vertex</td><td>Auto-close polygon</td></tr>
                 <tr><td>Click box/polygon</td><td>Select / deselect annotation</td></tr>
                 <tr><td>Click split region</td><td>Select sub-region and edit Category / Aisle / Direction / Type</td></tr>
+                <tr><td>Type in Category / Sub-category</td><td>Filter the option list to quickly find labels</td></tr>
                 <tr><td>Drag split line</td><td>Resize adjacent sub-regions</td></tr>
                 <tr><td>Click × on selected</td><td>Delete annotation</td></tr>
                 <tr><td>X</td><td>Delete selected sub-region or annotation</td></tr>
@@ -235,6 +236,8 @@
         // Configuration injected by Django template
         window.LAYOUT_DATA_BASE_URL = '{{ data_base_url }}';
         window.LAYOUT_SAVE_BASE_URL = '/store_layout/{{ store_id }}';
+        window.LAYOUT_STORE_ID = '{{ store_id }}';
+        window.LAYOUT_EXPORT_SAVE_URL = '/store_layout/{{ store_id }}/save-export';
         window.LAYOUT_ASSETS_URL = '/store_layout/{{ store_id }}/assets-metadata';
         window.LAYOUT_LABELS_YAML_URL = '/static/store_layout/labels.yaml';
         window.LAYOUT_BUSINESS_L1_L2_YAML_URL = '/static/store_layout/business_l1_l2.yaml';

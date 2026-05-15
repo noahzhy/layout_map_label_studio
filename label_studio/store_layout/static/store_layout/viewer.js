@@ -717,6 +717,39 @@ class StoreLayoutViewer {
             .filter(Boolean);
     }
 
+    normalizeSearchText(value) {
+        if (value === null || value === undefined) return '';
+        return String(value)
+            .normalize('NFKC')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    getOptionSearchText(value) {
+        const raw = this.normalizeSearchText(value);
+        const display = this.normalizeSearchText(this.getDisplayText(value));
+        return [...new Set([raw, display].filter(Boolean))].join(' ');
+    }
+
+    filterOptionsBySearch(options, query, preservedValues = []) {
+        const values = Array.isArray(options) ? [...options] : [];
+        for (const preserved of preservedValues || []) {
+            if (preserved && !values.includes(preserved)) {
+                values.unshift(preserved);
+            }
+        }
+
+        const normalizedQuery = this.normalizeSearchText(query);
+        if (!normalizedQuery) return values;
+
+        const terms = normalizedQuery.split(' ').filter(Boolean);
+        return values.filter((opt) => {
+            const haystack = this.getOptionSearchText(opt);
+            return terms.every(term => haystack.includes(term));
+        });
+    }
+
     setCsvState(state, message = '') {
         this.csvLoadState = state;
         this.csvStatusMessage = message;
@@ -6216,6 +6249,1184 @@ class StoreLayoutViewer {
         return { canvas, bounds };
     }
 
+    sanitizeExportText(value) {
+        if (value === null || value === undefined) return '';
+        let result = String(value).normalize('NFKC').trim();
+        if (!result) return '';
+
+        result = result
+            .replace(/\s*<[^<>]*[\u3400-\u9fff\uf900-\ufaff][^<>]*>\s*/gu, ' ')
+            .replace(/\s*\([^()]*[\u3400-\u9fff\uf900-\ufaff][^()]*\)\s*/gu, ' ')
+            .replace(/\s*（[^（）]*[\u3400-\u9fff\uf900-\ufaff][^（）]*）\s*/gu, ' ')
+            .replace(/\s*\[[^\[\]]*[\u3400-\u9fff\uf900-\ufaff][^\[\]]*\]\s*/gu, ' ')
+            .replace(/\s*【[^【】]*[\u3400-\u9fff\uf900-\ufaff][^【】]*】\s*/gu, ' ')
+            .replace(/\s*「[^「」]*[\u3400-\u9fff\uf900-\ufaff][^「」]*」\s*/gu, ' ')
+            .replace(/\s*『[^『』]*[\u3400-\u9fff\uf900-\ufaff][^『』]*』\s*/gu, ' ')
+            .replace(CHINESE_TEXT_REGEX_GLOBAL, ' ')
+            .replace(/[，。；：、！？]/gu, ' ')
+            .replace(/<\s*>|\(\s*\)|（\s*）|\[\s*\]|【\s*】|「\s*」|『\s*』/gu, ' ')
+            .replace(/\s*([·/,:;|])\s*/g, ' $1 ')
+            .replace(/(?:^|\s)[·/,:;|](?=\s|$)/g, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .replace(/^[·/,:;|\s]+|[·/,:;|\s]+$/g, '')
+            .trim();
+
+        return result;
+    }
+
+    escapeXml(value) {
+        return String(value === undefined || value === null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+    }
+
+    makeExportSlug(value, fallback = 'item') {
+        const clean = this.sanitizeExportText(value)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+        return clean || fallback;
+    }
+
+    getExportStoreId() {
+        if (typeof window !== 'undefined' && window.LAYOUT_STORE_ID) {
+            return String(window.LAYOUT_STORE_ID);
+        }
+        const base = this.dataBaseUrl || '';
+        const match = base.match(/\/store_layout\/([^/]+)\//);
+        if (match) {
+            try { return decodeURIComponent(match[1]); } catch (_) { return match[1]; }
+        }
+        return this.getExportBaseNameByParentDir().replace(/^viewer_/, '') || 'unknown';
+    }
+
+    getExportStoreName() {
+        return this.sanitizeExportText(this.metadata && this.metadata.storeName) || this.getExportStoreId();
+    }
+
+    getSvgExportUnitInfo() {
+        if (this.baseRatio !== null && this.baseRatio > 0) {
+            return {
+                scale: this.baseRatio,
+                units: this.calibrationUnit || 'm',
+                calibrated: true,
+            };
+        }
+        return { scale: 1, units: 'px', calibrated: false };
+    }
+
+    getRotatedRectPoints(x, y, width, height, angleDeg, centerX = null, centerY = null) {
+        const points = [
+            { x, y },
+            { x: x + width, y },
+            { x: x + width, y: y + height },
+            { x, y: y + height },
+        ];
+        const angle = Number(angleDeg) || 0;
+        if (!angle) return points;
+
+        const cx = centerX === null ? x + width / 2 : centerX;
+        const cy = centerY === null ? y + height / 2 : centerY;
+        const rad = angle * Math.PI / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        return points.map(pt => {
+            const dx = pt.x - cx;
+            const dy = pt.y - cy;
+            return {
+                x: cx + dx * cos - dy * sin,
+                y: cy + dx * sin + dy * cos,
+            };
+        });
+    }
+
+    getFixtureTypeForExport(label) {
+        const normalized = this.sanitizeExportText(label).toLowerCase().replace(/[\s/-]+/g, '_');
+        const map = {
+            shelf: 'aisle',
+            aisle: 'aisle',
+            wall_shelf: 'wall_shelf',
+            island: 'island',
+            cooler: 'cooler',
+            refrigerator: 'cooler',
+            counter: 'counter',
+            endcap: 'other',
+            entrance: 'entrance',
+            exit: 'entrance',
+            entrance_exit: 'entrance',
+            checkout: 'checkout_lane',
+            checkout_shelf: 'checkout_lane',
+            checkout_lane: 'checkout_lane',
+            pharmacy: 'pharmacy',
+            restroom: 'restroom',
+            other: 'other',
+        };
+        return map[normalized] || 'other';
+    }
+
+    getExportZoneType(label) {
+        const normalized = this.sanitizeExportText(label).toLowerCase();
+        if (normalized.includes('checkout')) return 'checkout';
+        if (normalized.includes('pharmacy')) return 'pharmacy';
+        if (normalized.includes('other')) return 'other';
+        return 'department';
+    }
+
+    getExportAisleSide(attrs = {}, fallback = '') {
+        const side = this.sanitizeExportText(this.normalizeAisleDirection(attrs.side) || attrs.side || '');
+        return side || fallback;
+    }
+
+    getExportAisleLabel(attrs = {}, fallback = '') {
+        return this.sanitizeExportText(attrs.aisle || attrs.notes || '') || String(fallback || '');
+    }
+
+    getExportFixtureName(attrs = {}, fallback = '') {
+        return this.sanitizeExportText(attrs.category || fallback || '');
+    }
+
+    getExportIdToken(value, fallback = 'item') {
+        return this.makeExportSlug(value, fallback).replace(/_/g, '-');
+    }
+
+    getExportLayerInfo(ann, attrs = {}) {
+        const label = this.sanitizeExportText(attrs.regionType || ann.label || '');
+        const attr = typeof ann.attribute === 'string' ? ann.attribute.trim().toLowerCase() : '';
+        const normalizedLabel = label.toLowerCase().replace(/[\s/-]+/g, '_');
+
+        if (attr === 'boundary' || ann.level === 1 || normalizedLabel === 'boundary') {
+            return { layer: 'boundary', subtype: 'boundary', label };
+        }
+        if (attr === 'inner-structure' || ann.level === 2 || normalizedLabel === 'inner_wall') {
+            return { layer: 'inner-walls', subtype: 'inner-wall', label };
+        }
+        if (attr === 'area' || ann.level === 5) {
+            return { layer: 'zones', subtype: 'zone', label };
+        }
+        if (normalizedLabel.includes('corridor') || normalizedLabel === 'walk_aisle') {
+            return { layer: 'virtual', subtype: 'walk_corridor', label };
+        }
+        return { layer: 'fixtures', subtype: this.getFixtureTypeForExport(label || ann.label), label };
+    }
+
+    buildExportDataAttributes(ann, attrs, elemId, layerInfo, sequence = '') {
+        const data = {
+            'data-id': elemId,
+        };
+
+        if (layerInfo.layer === 'boundary') {
+            data['data-type'] = 'boundary';
+            data['data-is-walkable'] = 'false';
+        } else if (layerInfo.layer === 'inner-walls') {
+            data['data-type'] = 'inner-wall';
+            data['data-is-walkable'] = 'false';
+        } else if (layerInfo.layer === 'fixtures') {
+            const fixtureType = layerInfo.subtype || 'other';
+            const labelNorm = this.sanitizeExportText(layerInfo.label).toLowerCase().replace(/[\s/-]+/g, '_');
+            const isEntrance = fixtureType === 'entrance' || labelNorm === 'entrance' || labelNorm === 'exit' || labelNorm === 'entrance_exit';
+            const category = this.getExportFixtureName(attrs, fixtureType === 'aisle' ? 'Aisle' : '');
+            const aisle = this.getExportAisleLabel(attrs, sequence);
+            const side = this.getExportAisleSide(attrs, fixtureType === 'aisle' ? 'Both' : '');
+
+            data['data-type'] = 'fixture';
+            data['data-fixture-type'] = fixtureType;
+            data['data-is-walkable'] = isEntrance ? 'true' : 'false';
+            if (fixtureType === 'aisle') {
+                data['data-label'] = aisle;
+                data['data-name'] = category || 'Aisle';
+                data['data-aisle-side'] = side.toLowerCase();
+            }
+        } else if (layerInfo.layer === 'virtual') {
+            const aisle = this.getExportAisleLabel(attrs, sequence);
+            data['data-type'] = 'virtual';
+            data['data-virtual-type'] = 'walk_corridor';
+            data['data-is-walkable'] = 'true';
+            data['data-aisle-label'] = aisle;
+        } else {
+            const zoneName = this.sanitizeExportText(attrs.category || layerInfo.label || ann.label || 'Other');
+            data['data-type'] = 'zone';
+            data['data-zone-type'] = this.getExportZoneType(zoneName);
+            data['data-zone-name'] = zoneName || 'Other';
+        }
+
+        return data;
+    }
+
+    getExportElementLabel(ann, attrs, layerInfo) {
+        if (layerInfo.layer === 'fixtures') {
+            const parts = [];
+            const fixtureLabel = this.sanitizeExportText(layerInfo.label || ann.label || '');
+            const category = this.sanitizeExportText(attrs.category || '');
+            const aisle = this.sanitizeExportText(attrs.aisle || attrs.notes || '');
+            const side = this.getExportAisleSide(attrs);
+            if (fixtureLabel) parts.push(fixtureLabel);
+            if (category) parts.push(category);
+            if (aisle) parts.push(`Aisle ${aisle}`);
+            if (side) parts.push(side);
+            return parts.join(' · ');
+        }
+        if (layerInfo.layer === 'zones') {
+            return this.sanitizeExportText(attrs.category || layerInfo.label || ann.label || '');
+        }
+        if (layerInfo.layer === 'virtual') {
+            const aisle = this.sanitizeExportText(attrs.aisle || attrs.notes || '');
+            return aisle ? `Walk Corridor ${aisle}` : 'Walk Corridor';
+        }
+        return this.sanitizeExportText(layerInfo.label || ann.label || '');
+    }
+
+    getExportLayerStyle(layer, subtype) {
+        if (layer === 'boundary') {
+            return { fill: 'none', fillOpacity: '0', stroke: '#000000', strokeWidth: 3 };
+        }
+        if (layer === 'inner-walls') {
+            return { fill: '#8e44ad', fillOpacity: '0.20', stroke: '#8e44ad', strokeWidth: 1.5 };
+        }
+        if (layer === 'fixtures') {
+            const fixtureColors = {
+                entrance: '#00A3A3',
+                aisle: '#2980b9',
+                cooler: '#42D4F4',
+                checkout_lane: '#F58231',
+                pharmacy: '#911EB4',
+                restroom: '#469990',
+                wall_shelf: '#4363D8',
+            };
+            const color = fixtureColors[subtype] || '#2980b9';
+            return { fill: color, fillOpacity: '0.22', stroke: color, strokeWidth: 1.5 };
+        }
+        if (layer === 'virtual') {
+            return { fill: '#27ae60', fillOpacity: '0.16', stroke: '#27ae60', strokeWidth: 1.5 };
+        }
+        return { fill: '#f39c12', fillOpacity: '0.18', stroke: '#f39c12', strokeWidth: 1.5 };
+    }
+
+    collectSvgExportItems() {
+        const items = [];
+        const usedIds = new Set();
+        const counters = {
+            boundary: 0,
+            'inner-walls': 0,
+            fixtures: 0,
+            virtual: 0,
+            zones: 0,
+        };
+
+        const uniqueId = (baseId) => {
+            let id = baseId;
+            let suffix = 2;
+            while (usedIds.has(id)) {
+                id = `${baseId}-${suffix}`;
+                suffix += 1;
+            }
+            usedIds.add(id);
+            return id;
+        };
+
+        const nextIdentity = (ann, attrs, layerInfo) => {
+            counters[layerInfo.layer] = (counters[layerInfo.layer] || 0) + 1;
+            const idx = counters[layerInfo.layer];
+            let baseId;
+            if (layerInfo.layer === 'boundary') {
+                baseId = idx === 1 ? 'boundary-outer' : `boundary-outer-${idx}`;
+            } else if (layerInfo.layer === 'inner-walls') {
+                baseId = `inner-wall-${this.getExportIdToken(attrs.category || layerInfo.label || idx, String(idx))}`;
+            } else if (layerInfo.layer === 'fixtures') {
+                const subtype = layerInfo.subtype || 'other';
+                const subtypeToken = this.getExportIdToken(subtype, 'other');
+                if (subtype === 'aisle') {
+                    const aisle = this.getExportAisleLabel(attrs, idx);
+                    const side = this.getExportAisleSide(attrs, 'Both');
+                    const name = this.getExportFixtureName(attrs, layerInfo.label || ann.label || 'aisle');
+                    baseId = `fx-aisle-${this.getExportIdToken(aisle, String(idx))}-${this.getExportIdToken(side, 'both')}-${this.getExportIdToken(name, 'aisle')}`;
+                } else {
+                    baseId = `fx-${subtypeToken}-${idx}-${this.getExportIdToken(attrs.category || layerInfo.label || ann.label || 'fixture', 'fixture')}`;
+                }
+            } else if (layerInfo.layer === 'virtual') {
+                baseId = `walk-aisle-${this.getExportIdToken(this.getExportAisleLabel(attrs, idx), String(idx))}`;
+            } else {
+                baseId = `zone-${this.getExportIdToken(attrs.category || layerInfo.label || ann.label || 'zone', 'zone')}-${idx}`;
+            }
+            return { id: uniqueId(baseId), index: idx };
+        };
+
+        const addRectLike = (ann, x, y, width, height, attrs = {}) => {
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) return;
+            if (Math.abs(width) < 1e-9 || Math.abs(height) < 1e-9) return;
+            const left = Math.min(x, x + width);
+            const top = Math.min(y, y + height);
+            const w = Math.abs(width);
+            const h = Math.abs(height);
+            const layerInfo = this.getExportLayerInfo(ann, attrs);
+            const identity = nextIdentity(ann, attrs, layerInfo);
+            const elemId = identity.id;
+            const angle = Number(ann.angle) || 0;
+            const parentCx = ann.x + ann.width / 2;
+            const parentCy = ann.y + ann.height / 2;
+            const points = this.getRotatedRectPoints(left, top, w, h, angle, parentCx, parentCy);
+            const label = this.getExportElementLabel(ann, attrs, layerInfo);
+            const data = this.buildExportDataAttributes(ann, attrs, elemId, layerInfo, identity.index);
+            const style = this.getExportLayerStyle(layerInfo.layer, layerInfo.subtype);
+
+            items.push({
+                sourceId: ann.id,
+                id: elemId,
+                layer: layerInfo.layer,
+                subtype: layerInfo.subtype,
+                shape: angle ? 'polygon' : 'rect',
+                x: left,
+                y: top,
+                width: w,
+                height: h,
+                points,
+                label,
+                data,
+                style,
+            });
+        };
+
+        const addPolygon = (ann) => {
+            if (!Array.isArray(ann.vertices) || ann.vertices.length < 3) return;
+            const attrs = ann.attributes && typeof ann.attributes === 'object' ? ann.attributes : {};
+            const points = ann.vertices
+                .map(pt => ({ x: Number(pt.x), y: Number(pt.y) }))
+                .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+            if (points.length < 3) return;
+            const layerInfo = this.getExportLayerInfo(ann, attrs);
+            const identity = nextIdentity(ann, attrs, layerInfo);
+            const elemId = identity.id;
+            items.push({
+                sourceId: ann.id,
+                id: elemId,
+                layer: layerInfo.layer,
+                subtype: layerInfo.subtype,
+                shape: 'polygon',
+                points,
+                label: this.getExportElementLabel(ann, attrs, layerInfo),
+                data: this.buildExportDataAttributes(ann, attrs, elemId, layerInfo, identity.index),
+                style: this.getExportLayerStyle(layerInfo.layer, layerInfo.subtype),
+            });
+        };
+
+        const walkSplitLeaves = (ann) => {
+            const root = this.getSplitRoot(ann);
+            if (!root) return;
+            const { leaves } = this.getSplitLayout(root, { x: 0, y: 0, width: ann.width, height: ann.height });
+            for (const leafInfo of leaves) {
+                const attrs = leafInfo.node && leafInfo.node.attributes ? leafInfo.node.attributes : {};
+                const rect = leafInfo.rect;
+                addRectLike(ann, ann.x + rect.x, ann.y + rect.y, rect.width, rect.height, attrs);
+            }
+        };
+
+        for (const ann of this.annotations || []) {
+            if (!ann) continue;
+            if (ann.type === 'split-bbox') {
+                walkSplitLeaves(ann);
+            } else if (ann.type === 'polygon') {
+                addPolygon(ann);
+            } else if (ann.type === 'bbox') {
+                const attrs = ann.attributes && typeof ann.attributes === 'object' ? ann.attributes : {};
+                addRectLike(ann, ann.x, ann.y, ann.width, ann.height, attrs);
+            }
+        }
+
+        if (!items.some(item => item.layer === 'boundary')) {
+            const bounds = this.getSvgItemsBounds(items);
+            if (bounds) {
+                usedIds.add('boundary-outer');
+                items.unshift({
+                    sourceId: null,
+                    id: 'boundary-outer',
+                    layer: 'boundary',
+                    subtype: 'boundary',
+                    shape: 'polygon',
+                    points: [
+                        { x: bounds.minX, y: bounds.minY },
+                        { x: bounds.maxX, y: bounds.minY },
+                        { x: bounds.maxX, y: bounds.maxY },
+                        { x: bounds.minX, y: bounds.maxY },
+                    ],
+                    label: 'Boundary',
+                    data: {
+                        'data-id': 'boundary-outer',
+                        'data-type': 'boundary',
+                        'data-is-walkable': 'false',
+                        'data-generated': 'annotation-bounds',
+                    },
+                    style: this.getExportLayerStyle('boundary', 'boundary'),
+                });
+            }
+        }
+
+        return items;
+    }
+
+    getSvgBoundaryBounds(items) {
+        const boundaryItems = (items || []).filter(item => item.layer === 'boundary');
+        return this.getSvgItemsBounds(boundaryItems) || this.getSvgItemsBounds(items);
+    }
+
+    getSvgItemsBounds(items) {
+        const points = [];
+        for (const item of items) {
+            if (Array.isArray(item.points)) {
+                points.push(...item.points);
+            }
+        }
+        if (points.length === 0) return null;
+        const xs = points.map(p => p.x);
+        const ys = points.map(p => p.y);
+        return {
+            minX: Math.min(...xs),
+            minY: Math.min(...ys),
+            maxX: Math.max(...xs),
+            maxY: Math.max(...ys),
+        };
+    }
+
+    formatSvgNumber(value) {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return '0';
+        return num.toFixed(4).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+    }
+
+    buildSvgAttributes(attrs) {
+        return Object.entries(attrs)
+            .filter(([, value]) => value !== null && value !== undefined && String(value) !== '')
+            .map(([key, value]) => `${key}="${this.escapeXml(value)}"`)
+            .join(' ');
+    }
+
+    getSvgExportLabelFontSize(unitInfo) {
+        const scale = unitInfo && unitInfo.scale ? Number(unitInfo.scale) : 1;
+        if (unitInfo && unitInfo.calibrated && Number.isFinite(scale) && scale > 0) {
+            return Math.max(0.12, 14 * scale);
+        }
+        return 14;
+    }
+
+    buildSvgBasemapPngDataUrl(sourceBounds, maxLongEdge = 2048) {
+        if (!sourceBounds || !Array.isArray(this.pointCloud) || this.pointCloud.length === 0) return '';
+        if (typeof document === 'undefined' || typeof document.createElement !== 'function') return '';
+
+        const sourceWidth = Math.max(sourceBounds.maxX - sourceBounds.minX, 1);
+        const sourceHeight = Math.max(sourceBounds.maxY - sourceBounds.minY, 1);
+        const aspect = sourceWidth / sourceHeight;
+        const canvas = document.createElement('canvas');
+
+        if (aspect >= 1) {
+            canvas.width = maxLongEdge;
+            canvas.height = Math.max(1, Math.round(maxLongEdge / aspect));
+        } else {
+            canvas.height = maxLongEdge;
+            canvas.width = Math.max(1, Math.round(maxLongEdge * aspect));
+        }
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return '';
+
+        const scaleX = canvas.width / sourceWidth;
+        const scaleY = canvas.height / sourceHeight;
+        const pointRadius = Math.max(1, Math.round(Math.max(canvas.width, canvas.height) / 1400));
+
+        ctx.save();
+        ctx.fillStyle = 'rgb(243, 236, 217)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = 'rgba(56, 56, 56, 0.82)';
+
+        for (const pt of this.pointCloud) {
+            if (!Array.isArray(pt) || pt.length < 2) continue;
+            const x = Number(pt[0]);
+            const y = Number(pt[1]);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            if (x < sourceBounds.minX || x > sourceBounds.maxX || y < sourceBounds.minY || y > sourceBounds.maxY) continue;
+
+            const px = (x - sourceBounds.minX) * scaleX;
+            const py = (y - sourceBounds.minY) * scaleY;
+            ctx.beginPath();
+            ctx.arc(px, py, pointRadius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+        return canvas.toDataURL('image/png');
+    }
+
+    buildDoorDashSvgExport() {
+        const items = this.collectSvgExportItems();
+        if (items.length === 0) return null;
+
+        const bounds = this.getSvgBoundaryBounds(items);
+        if (!bounds) return null;
+
+        const unitInfo = this.getSvgExportUnitInfo();
+        const scale = unitInfo.scale || 1;
+        const width = Math.max((bounds.maxX - bounds.minX) * scale, 1);
+        const height = Math.max((bounds.maxY - bounds.minY) * scale, 1);
+        const storeId = this.getExportStoreId();
+        const storeName = this.getExportStoreName();
+        const filename = `${storeId}-level-1.svg`;
+        const basemapDataUrl = this.buildSvgBasemapPngDataUrl(bounds);
+        const layerOrder = [
+            ['boundary', 'outer-boundary', 'boundary'],
+            ['inner-walls', 'layer-inner-walls', 'inner-walls'],
+            ['fixtures', 'layer-fixtures', 'fixtures'],
+            ['virtual', 'layer-virtual', 'virtual'],
+            ['zones', 'layer-zones', 'zones'],
+        ];
+
+        const pointToSvg = (pt) => ({
+            x: (pt.x - bounds.minX) * scale,
+            y: (pt.y - bounds.minY) * scale,
+        });
+
+        const renderItem = (item) => {
+            const sw = this.formatSvgNumber(item.style.strokeWidth * scale);
+            const common = {
+                id: item.id,
+                fill: item.style.fill,
+                'fill-opacity': item.style.fillOpacity,
+                stroke: item.style.stroke,
+                'stroke-width': sw,
+                ...item.data,
+            };
+
+            const normalizedPoints = item.points.map(pointToSvg);
+
+            if (item.shape === 'rect' && item.layer !== 'boundary') {
+                const x = (item.x - bounds.minX) * scale;
+                const y = (item.y - bounds.minY) * scale;
+                return `    <rect ${this.buildSvgAttributes({
+                    ...common,
+                    x: this.formatSvgNumber(x),
+                    y: this.formatSvgNumber(y),
+                    width: this.formatSvgNumber(item.width * scale),
+                    height: this.formatSvgNumber(item.height * scale),
+                })}/>`;
+            }
+
+            const pointsAttr = normalizedPoints
+                .map(p => `${this.formatSvgNumber(p.x)},${this.formatSvgNumber(p.y)}`)
+                .join(' ');
+            return `    <polygon ${this.buildSvgAttributes({ ...common, points: pointsAttr })}/>`;
+        };
+
+        const rootAttrs = {
+            xmlns: 'http://www.w3.org/2000/svg',
+            viewBox: `0 0 ${this.formatSvgNumber(width)} ${this.formatSvgNumber(height)}`,
+            width: this.formatSvgNumber(width),
+            height: this.formatSvgNumber(height),
+            'data-schema': 'clobotics_store_delivery',
+            'data-schema-version': '1.0',
+            'data-store-id': storeId,
+            'data-store-name': storeName,
+            'data-vendor': 'clobotics',
+            'data-delivery': 'doordash-store-layout',
+            'data-units': unitInfo.units,
+        };
+        if (unitInfo.calibrated) rootAttrs['data-scale'] = this.formatSvgNumber(scale);
+
+        const lines = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            `<svg ${this.buildSvgAttributes(rootAttrs)}>`,
+            '  <g id="layer-basemap" data-layer="basemap">',
+        ];
+        if (basemapDataUrl) {
+            lines.push(`    <image ${this.buildSvgAttributes({
+                href: basemapDataUrl,
+                x: '0',
+                y: '0',
+                width: this.formatSvgNumber(width),
+                height: this.formatSvgNumber(height),
+                preserveAspectRatio: 'none',
+                'data-source': 'point-cloud-png',
+            })}/>`);
+        }
+        lines.push('  </g>');
+
+        for (const [layerKey, groupId, dataLayer] of layerOrder) {
+            lines.push(`  <g id="${groupId}" data-layer="${dataLayer}">`);
+            for (const item of items.filter(it => it.layer === layerKey)) {
+                lines.push(renderItem(item));
+            }
+            lines.push('  </g>');
+        }
+
+        lines.push('  <g id="layer-labels" data-layer="labels">');
+        lines.push('  </g>');
+        lines.push('</svg>');
+
+        const svg = lines.join('\n') + '\n';
+        const metadata = this.buildStoreMetadataExport(filename, width, height, unitInfo, bounds, items.length, Boolean(basemapDataUrl));
+        return { svg, metadata, svgFilename: filename, metadataFilename: 'store-metadata.json', itemCount: items.length };
+    }
+
+    buildStoreMetadataExport(svgFilename, width, height, unitInfo, sourceBounds, itemCount, hasEmbeddedBasemap = false) {
+        const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+        const coordinateSystem = {
+            origin: 'top_left',
+            view_box: [0, 0, width, height],
+            note: unitInfo.calibrated
+                ? `Coordinates are normalized to the outer boundary AABB. One SVG unit equals one ${unitInfo.units}; source viewer world units are multiplied by ${unitInfo.scale}.`
+                : 'Coordinates are normalized to the outer boundary AABB in viewer world units. Calibrate scale before treating coordinates as physical distance.',
+            source_bounds: {
+                min_x: sourceBounds.minX,
+                min_y: sourceBounds.minY,
+                max_x: sourceBounds.maxX,
+                max_y: sourceBounds.maxY,
+            },
+        };
+        if (unitInfo.calibrated) {
+            coordinateSystem.scale_per_world_unit = unitInfo.scale;
+            coordinateSystem.scale_unit = unitInfo.units;
+            coordinateSystem.svg_unit = unitInfo.units;
+        }
+
+        return {
+            schema: 'clobotics_store_delivery',
+            schema_version: '1.0',
+            store_id: this.getExportStoreId(),
+            store_name: this.getExportStoreName(),
+            captured_at: now,
+            units: unitInfo.units,
+            coordinate_system: coordinateSystem,
+            levels: [{
+                level_id: '1',
+                level_label: 'Ground Floor',
+                is_default: true,
+                svg_file: svgFilename,
+                basemap_embedded: hasEmbeddedBasemap,
+                basemap_source: hasEmbeddedBasemap ? 'point-cloud-png' : null,
+                basemap_role: hasEmbeddedBasemap ? 'qa_alignment_only' : null,
+                width,
+                height,
+            }],
+            source: {
+                vendor: 'clobotics',
+                ingested_at: now,
+                viewer_export: true,
+                annotation_count: itemCount,
+            },
+        };
+    }
+
+    buildSvgPreviewHtml(svgFilename, svgContent, metadata) {
+        const title = `${this.getExportStoreName()} SVG Preview`;
+        const generatedAt = metadata && metadata.captured_at ? metadata.captured_at : new Date().toISOString();
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${this.escapeXml(title)}</title>
+    <style>
+        :root { color-scheme: light; }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f5efe2; color: #2d261d; }
+        header { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 14px; background: rgba(255, 250, 240, 0.94); border-bottom: 1px solid #d9c8aa; box-shadow: 0 2px 12px rgba(70, 45, 20, 0.10); backdrop-filter: blur(8px); }
+        h1 { margin: 0; font-size: 16px; }
+        .meta { font-size: 12px; color: #6f604d; }
+        .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+        button { border: 1px solid #cdb895; border-radius: 8px; padding: 6px 10px; background: #fff7e8; color: #3c2f20; cursor: pointer; font-weight: 600; }
+        button:hover { background: #ffedc9; }
+        .zoom-readout { min-width: 48px; text-align: center; font-size: 12px; color: #5d4d39; }
+        .hint { font-size: 12px; color: #6f604d; }
+        main { height: calc(100vh - 62px); display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 14px; padding: 14px; }
+        aside { overflow: auto; background: rgba(255, 250, 240, 0.86); border: 1px solid #d9c8aa; border-radius: 12px; box-shadow: 0 10px 28px rgba(70,45,20,.10); }
+        .panel-title { position: sticky; top: 0; padding: 12px 14px; background: #fff6e7; border-bottom: 1px solid #e3d0ad; font-weight: 700; }
+        .panel-section { padding: 10px 12px; border-bottom: 1px solid #ead9b9; }
+        .section-title { margin: 0 0 8px; font-size: 12px; font-weight: 800; color: #69533a; text-transform: uppercase; letter-spacing: .04em; }
+        .summary-grid { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; font-size: 12px; }
+        .summary-grid span:nth-child(odd) { color: #6f604d; }
+        .summary-grid span:nth-child(even) { font-weight: 700; text-align: right; }
+        .layer-list { display: grid; gap: 2px; padding: 8px; }
+        .layer-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+        .layer-item:hover { background: #fff1d6; }
+        .layer-item input { margin: 0; }
+        .layer-name { flex: 1; }
+        .layer-count { min-width: 28px; border-radius: 999px; padding: 1px 7px; background: #ead9b9; color: #5a4933; text-align: center; font-size: 11px; font-weight: 700; }
+        .inspect-help { color: #7a6a55; font-size: 12px; line-height: 1.45; }
+        .attr-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+        .attr-table th, .attr-table td { padding: 5px 4px; border-bottom: 1px solid #ead9b9; vertical-align: top; word-break: break-word; }
+        .attr-table th { width: 44%; color: #6f604d; text-align: left; font-weight: 700; }
+        .empty-note { color: #8a765b; font-size: 12px; font-style: italic; }
+        .canvas { width: 100%; height: 100%; overflow: auto; background: #fffaf0; border: 1px solid #d9c8aa; border-radius: 12px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.65), 0 12px 32px rgba(70,45,20,.12); cursor: grab; }
+        .canvas.dragging { cursor: grabbing; }
+        .svg-wrap { min-width: 100%; min-height: 100%; width: max-content; height: max-content; display: flex; align-items: flex-start; justify-content: center; padding: 24px; }
+        .export-svg { display: block; flex: 0 0 auto; background: white; border-radius: 6px; box-shadow: 0 4px 18px rgba(0,0,0,.10); }
+        .export-svg [data-id] { cursor: pointer; }
+        .export-svg .preview-selected { outline: none; stroke: #ff2f00 !important; stroke-width: max(0.06px, 2px) !important; vector-effect: non-scaling-stroke; }
+        code { background: #efe1c8; border-radius: 4px; padding: 2px 5px; }
+        @media (max-width: 760px) {
+            header { align-items: flex-start; flex-direction: column; }
+            main { height: calc(100vh - 112px); grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+            aside { max-height: 180px; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>${this.escapeXml(title)}</h1>
+            <div class="meta">File: <code>${this.escapeXml(svgFilename)}</code> · Generated: ${this.escapeXml(generatedAt)}</div>
+        </div>
+        <div class="toolbar" aria-label="Preview controls">
+            <button type="button" id="zoomOut">−</button>
+            <span class="zoom-readout" id="zoomReadout">Fit</span>
+            <button type="button" id="zoomIn">+</button>
+            <button type="button" id="zoomFit">Fit</button>
+            <button type="button" id="zoomActual">1×</button>
+            <span class="hint">Drag to pan · Ctrl/⌘ + wheel to zoom</span>
+        </div>
+    </header>
+    <main>
+        <aside>
+            <div class="panel-title">SVG Contract Preview</div>
+            <div class="panel-section">
+                <p class="section-title">Summary</p>
+                <div class="summary-grid" id="summaryGrid"></div>
+            </div>
+            <div class="panel-section">
+                <p class="section-title">Layers</p>
+                <div class="layer-list" id="layerList"></div>
+            </div>
+            <div class="panel-section">
+                <p class="section-title">Selected Element</p>
+                <div id="inspector" class="inspect-help">Click a boundary, wall, fixture, zone, or virtual corridor to inspect its id and data-* attributes.</div>
+            </div>
+        </aside>
+        <div class="canvas" id="canvas">
+            <div class="svg-wrap" id="svgWrap">
+${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
+            </div>
+        </div>
+    </main>
+    <script>
+        (function () {
+            const canvas = document.getElementById('canvas');
+            const wrap = document.getElementById('svgWrap');
+            const svg = wrap ? wrap.querySelector('svg') : null;
+            const layerList = document.getElementById('layerList');
+            const summaryGrid = document.getElementById('summaryGrid');
+            const inspector = document.getElementById('inspector');
+            const zoomReadout = document.getElementById('zoomReadout');
+            if (!canvas || !wrap || !svg || !layerList || !summaryGrid || !inspector) return;
+
+            svg.classList.add('export-svg');
+            const viewBox = (svg.getAttribute('viewBox') || '0 0 1 1').trim().split(/\s+/).map(Number);
+            const vbWidth = Number.isFinite(viewBox[2]) && viewBox[2] > 0 ? viewBox[2] : Number(svg.getAttribute('width')) || 1;
+            const vbHeight = Number.isFinite(viewBox[3]) && viewBox[3] > 0 ? viewBox[3] : Number(svg.getAttribute('height')) || 1;
+            const layerLabels = {
+                basemap: 'Basemap / point cloud',
+                boundary: 'Boundary',
+                'inner-walls': 'Inner walls',
+                fixtures: 'Fixtures',
+                virtual: 'Virtual',
+                zones: 'Zones',
+                labels: 'Labels'
+            };
+            const defaultVisible = { labels: false };
+            const layerOrder = ['basemap', 'boundary', 'inner-walls', 'fixtures', 'virtual', 'zones', 'labels'];
+            const layers = new Map();
+            Array.from(svg.querySelectorAll('g[data-layer]')).forEach(function (group) {
+                const key = group.getAttribute('data-layer');
+                if (!layers.has(key)) layers.set(key, []);
+                layers.get(key).push(group);
+            });
+
+            function layerElementCount(key) {
+                const groups = layers.get(key) || [];
+                return groups.reduce(function (sum, group) {
+                    return sum + group.querySelectorAll('rect, polygon, path, image, text').length;
+                }, 0);
+            }
+
+            function setSummary(label, value) {
+                const k = document.createElement('span');
+                const v = document.createElement('span');
+                k.textContent = label;
+                v.textContent = value;
+                summaryGrid.appendChild(k);
+                summaryGrid.appendChild(v);
+            }
+
+            const fixtureNodes = Array.from(svg.querySelectorAll('[data-type="fixture"]'));
+            setSummary('Schema', svg.getAttribute('data-schema') || '—');
+            setSummary('Store', svg.getAttribute('data-store-id') || '—');
+            setSummary('Units', svg.getAttribute('data-units') || '—');
+            setSummary('viewBox', svg.getAttribute('viewBox') || '—');
+            setSummary('Fixtures', String(fixtureNodes.length));
+            setSummary('Aisles', String(fixtureNodes.filter(function (el) { return el.getAttribute('data-fixture-type') === 'aisle'; }).length));
+            setSummary('Zones', String(svg.querySelectorAll('[data-type="zone"]').length));
+            setSummary('Virtual', String(svg.querySelectorAll('[data-type="virtual"]').length));
+
+            layerOrder.filter(function (key) { return layers.has(key); }).forEach(function (key) {
+                const item = document.createElement('label');
+                item.className = 'layer-item';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = defaultVisible[key] !== false;
+                const text = document.createElement('span');
+                text.className = 'layer-name';
+                text.textContent = layerLabels[key] || key;
+                const count = document.createElement('span');
+                count.className = 'layer-count';
+                count.textContent = String(layerElementCount(key));
+                item.appendChild(checkbox);
+                item.appendChild(text);
+                item.appendChild(count);
+                layerList.appendChild(item);
+                const applyLayerVisibility = function () {
+                    layers.get(key).forEach(function (group) {
+                        group.style.display = checkbox.checked ? '' : 'none';
+                    });
+                };
+                checkbox.addEventListener('change', applyLayerVisibility);
+                applyLayerVisibility();
+            });
+
+            if (!layerList.children.length) {
+                const note = document.createElement('div');
+                note.className = 'empty-note';
+                note.textContent = 'No data-layer groups found.';
+                layerList.appendChild(note);
+            }
+
+            let selectedElement = null;
+            function renderInspector(el) {
+                if (!el) {
+                    inspector.className = 'inspect-help';
+                    inspector.textContent = 'Click a boundary, wall, fixture, zone, or virtual corridor to inspect its id and data-* attributes.';
+                    return;
+                }
+                inspector.className = '';
+                const table = document.createElement('table');
+                table.className = 'attr-table';
+                const attrs = Array.from(el.attributes)
+                    .filter(function (attr) { return attr.name === 'id' || attr.name.indexOf('data-') === 0; })
+                    .sort(function (a, b) {
+                        if (a.name === 'id') return -1;
+                        if (b.name === 'id') return 1;
+                        return a.name.localeCompare(b.name);
+                    });
+                attrs.forEach(function (attr) {
+                    const tr = document.createElement('tr');
+                    const th = document.createElement('th');
+                    const td = document.createElement('td');
+                    th.textContent = attr.name;
+                    td.textContent = attr.value;
+                    tr.appendChild(th);
+                    tr.appendChild(td);
+                    table.appendChild(tr);
+                });
+                inspector.replaceChildren(table);
+            }
+
+            Array.from(svg.querySelectorAll('[data-id]')).forEach(function (el) {
+                el.addEventListener('click', function (event) {
+                    event.stopPropagation();
+                    if (selectedElement) selectedElement.classList.remove('preview-selected');
+                    selectedElement = el;
+                    selectedElement.classList.add('preview-selected');
+                    renderInspector(el);
+                });
+            });
+            svg.addEventListener('click', function () {
+                if (selectedElement) selectedElement.classList.remove('preview-selected');
+                selectedElement = null;
+                renderInspector(null);
+            });
+
+            let fitScale = 1;
+            let currentScale = 1;
+            const minFactor = 0.15;
+            const maxFactor = 16;
+
+            function setSvgSize() {
+                svg.style.width = Math.max(1, vbWidth * currentScale) + 'px';
+                svg.style.height = Math.max(1, vbHeight * currentScale) + 'px';
+                zoomReadout.textContent = Math.round((currentScale / fitScale) * 100) + '%';
+            }
+
+            function computeFitScale() {
+                const availableW = Math.max(1, canvas.clientWidth - 64);
+                const availableH = Math.max(1, canvas.clientHeight - 64);
+                return Math.max(1, Math.min(availableW / vbWidth, availableH / vbHeight));
+            }
+
+            function fitToWindow() {
+                fitScale = computeFitScale();
+                currentScale = fitScale;
+                setSvgSize();
+                canvas.scrollLeft = Math.max(0, (wrap.scrollWidth - canvas.clientWidth) / 2);
+                canvas.scrollTop = Math.max(0, (wrap.scrollHeight - canvas.clientHeight) / 2);
+            }
+
+            function zoomBy(multiplier, event) {
+                const oldScale = currentScale;
+                const oldWidth = vbWidth * oldScale;
+                const oldHeight = vbHeight * oldScale;
+                const rect = canvas.getBoundingClientRect();
+                const focusX = event ? event.clientX - rect.left + canvas.scrollLeft - 24 : canvas.scrollLeft + canvas.clientWidth / 2 - 24;
+                const focusY = event ? event.clientY - rect.top + canvas.scrollTop - 24 : canvas.scrollTop + canvas.clientHeight / 2 - 24;
+                const ratioX = oldWidth > 0 ? focusX / oldWidth : 0.5;
+                const ratioY = oldHeight > 0 ? focusY / oldHeight : 0.5;
+                currentScale = Math.min(fitScale * maxFactor, Math.max(fitScale * minFactor, currentScale * multiplier));
+                setSvgSize();
+                canvas.scrollLeft = Math.max(0, ratioX * vbWidth * currentScale - (event ? event.clientX - rect.left : canvas.clientWidth / 2) + 24);
+                canvas.scrollTop = Math.max(0, ratioY * vbHeight * currentScale - (event ? event.clientY - rect.top : canvas.clientHeight / 2) + 24);
+            }
+
+            document.getElementById('zoomOut').addEventListener('click', function () { zoomBy(1 / 1.25); });
+            document.getElementById('zoomIn').addEventListener('click', function () { zoomBy(1.25); });
+            document.getElementById('zoomFit').addEventListener('click', fitToWindow);
+            document.getElementById('zoomActual').addEventListener('click', function () {
+                currentScale = Math.max(1, fitScale);
+                setSvgSize();
+            });
+            canvas.addEventListener('wheel', function (event) {
+                if (!event.ctrlKey && !event.metaKey) return;
+                event.preventDefault();
+                zoomBy(event.deltaY < 0 ? 1.15 : 1 / 1.15, event);
+            }, { passive: false });
+
+            let dragging = false;
+            let dragStartX = 0;
+            let dragStartY = 0;
+            let scrollStartX = 0;
+            let scrollStartY = 0;
+            canvas.addEventListener('pointerdown', function (event) {
+                dragging = true;
+                dragStartX = event.clientX;
+                dragStartY = event.clientY;
+                scrollStartX = canvas.scrollLeft;
+                scrollStartY = canvas.scrollTop;
+                canvas.classList.add('dragging');
+                canvas.setPointerCapture(event.pointerId);
+            });
+            canvas.addEventListener('pointermove', function (event) {
+                if (!dragging) return;
+                canvas.scrollLeft = scrollStartX - (event.clientX - dragStartX);
+                canvas.scrollTop = scrollStartY - (event.clientY - dragStartY);
+            });
+            canvas.addEventListener('pointerup', function (event) {
+                dragging = false;
+                canvas.classList.remove('dragging');
+                if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+            });
+            canvas.addEventListener('pointercancel', function () {
+                dragging = false;
+                canvas.classList.remove('dragging');
+            });
+            window.addEventListener('resize', function () {
+                const factor = currentScale / fitScale;
+                fitScale = computeFitScale();
+                currentScale = fitScale * factor;
+                setSvgSize();
+            });
+
+            fitToWindow();
+        })();
+    </script>
+</body>
+</html>
+`;
+    }
+
+    async saveExportTextPayload(filename, content) {
+        const saveUrl = typeof window !== 'undefined' && window.LAYOUT_EXPORT_SAVE_URL
+            ? window.LAYOUT_EXPORT_SAVE_URL
+            : `${this.saveBaseUrl}/save-export`;
+        const resp = await fetch(saveUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename, content }),
+        });
+        if (!resp.ok) {
+            const message = await resp.text().catch(() => resp.statusText);
+            throw new Error(`Failed to save ${filename}: ${message || resp.status}`);
+        }
+        return await resp.json().catch(() => ({}));
+    }
+
+    async saveExportBlobPayload(filename, blob) {
+        const saveUrl = typeof window !== 'undefined' && window.LAYOUT_EXPORT_SAVE_URL
+            ? window.LAYOUT_EXPORT_SAVE_URL
+            : `${this.saveBaseUrl}/save-export`;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        const resp = await fetch(saveUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename, content_base64: btoa(binary) }),
+        });
+        if (!resp.ok) {
+            const message = await resp.text().catch(() => resp.statusText);
+            throw new Error(`Failed to save ${filename}: ${message || resp.status}`);
+        }
+        return await resp.json().catch(() => ({}));
+    }
+
+    downloadTextPayload(content, filename, type = 'text/plain;charset=utf-8') {
+        const blob = new Blob([content], { type });
+        this.downloadBlobPayload(blob, filename);
+    }
+
+    downloadBlobPayload(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    makeCrc32Table() {
+        const table = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) {
+            let c = i;
+            for (let k = 0; k < 8; k++) {
+                c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+            }
+            table[i] = c >>> 0;
+        }
+        return table;
+    }
+
+    crc32(bytes) {
+        if (!this._zipCrc32Table) this._zipCrc32Table = this.makeCrc32Table();
+        let crc = 0xFFFFFFFF;
+        for (const byte of bytes) {
+            crc = this._zipCrc32Table[(crc ^ byte) & 0xFF] ^ (crc >>> 8);
+        }
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    dosDateTime(date = new Date()) {
+        const year = Math.max(1980, date.getFullYear());
+        const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+        const dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+        return { dosTime, dosDate };
+    }
+
+    writeZipUint16(out, value) {
+        out.push(value & 0xFF, (value >>> 8) & 0xFF);
+    }
+
+    writeZipUint32(out, value) {
+        out.push(value & 0xFF, (value >>> 8) & 0xFF, (value >>> 16) & 0xFF, (value >>> 24) & 0xFF);
+    }
+
+    createZipBlob(files) {
+        const encoder = new TextEncoder();
+        const localParts = [];
+        const centralParts = [];
+        let offset = 0;
+        const now = this.dosDateTime();
+
+        for (const file of files) {
+            const nameBytes = encoder.encode(file.name);
+            const dataBytes = encoder.encode(file.content);
+            const crc = this.crc32(dataBytes);
+            const local = [];
+            this.writeZipUint32(local, 0x04034b50);
+            this.writeZipUint16(local, 20);
+            this.writeZipUint16(local, 0x0800);
+            this.writeZipUint16(local, 0);
+            this.writeZipUint16(local, now.dosTime);
+            this.writeZipUint16(local, now.dosDate);
+            this.writeZipUint32(local, crc);
+            this.writeZipUint32(local, dataBytes.length);
+            this.writeZipUint32(local, dataBytes.length);
+            this.writeZipUint16(local, nameBytes.length);
+            this.writeZipUint16(local, 0);
+            localParts.push(new Uint8Array(local), nameBytes, dataBytes);
+
+            const central = [];
+            this.writeZipUint32(central, 0x02014b50);
+            this.writeZipUint16(central, 20);
+            this.writeZipUint16(central, 20);
+            this.writeZipUint16(central, 0x0800);
+            this.writeZipUint16(central, 0);
+            this.writeZipUint16(central, now.dosTime);
+            this.writeZipUint16(central, now.dosDate);
+            this.writeZipUint32(central, crc);
+            this.writeZipUint32(central, dataBytes.length);
+            this.writeZipUint32(central, dataBytes.length);
+            this.writeZipUint16(central, nameBytes.length);
+            this.writeZipUint16(central, 0);
+            this.writeZipUint16(central, 0);
+            this.writeZipUint16(central, 0);
+            this.writeZipUint16(central, 0);
+            this.writeZipUint32(central, 0);
+            this.writeZipUint32(central, offset);
+            centralParts.push(new Uint8Array(central), nameBytes);
+            offset += local.length + nameBytes.length + dataBytes.length;
+        }
+
+        const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+        const centralOffset = offset;
+        const end = [];
+        this.writeZipUint32(end, 0x06054b50);
+        this.writeZipUint16(end, 0);
+        this.writeZipUint16(end, 0);
+        this.writeZipUint16(end, files.length);
+        this.writeZipUint16(end, files.length);
+        this.writeZipUint32(end, centralSize);
+        this.writeZipUint32(end, centralOffset);
+        this.writeZipUint16(end, 0);
+
+        return new Blob([...localParts, ...centralParts, new Uint8Array(end)], { type: 'application/zip' });
+    }
+
+    async exportMapSvg() {
+        const exportPayload = this.buildDoorDashSvgExport();
+        if (!exportPayload) {
+            alert('No annotations available to export as SVG.');
+            return;
+        }
+
+        const metadataJson = JSON.stringify(exportPayload.metadata, null, 2);
+        const previewFilename = exportPayload.svgFilename.replace(/\.svg$/i, '-preview.html');
+        const previewHtml = this.buildSvgPreviewHtml(exportPayload.svgFilename, exportPayload.svg, exportPayload.metadata);
+        const zipFilename = exportPayload.svgFilename.replace(/\.svg$/i, '.zip');
+        const packageFolder = `${this.getExportIdToken(this.getExportStoreId(), 'store')}/`;
+        const zipBlob = this.createZipBlob([
+            { name: `${packageFolder}${exportPayload.svgFilename}`, content: exportPayload.svg },
+            { name: `${packageFolder}${exportPayload.metadataFilename}`, content: metadataJson },
+            { name: `${packageFolder}${previewFilename}`, content: previewHtml },
+        ]);
+        let serverSaved = false;
+        let serverError = null;
+
+        try {
+            await this.saveExportTextPayload(exportPayload.svgFilename, exportPayload.svg);
+            await this.saveExportTextPayload(exportPayload.metadataFilename, metadataJson);
+            await this.saveExportTextPayload(previewFilename, previewHtml);
+            await this.saveExportBlobPayload(zipFilename, zipBlob);
+            serverSaved = true;
+        } catch (error) {
+            serverError = error;
+            console.warn('Server export save failed; keeping local download backup:', error);
+        }
+
+        this.downloadBlobPayload(zipBlob, zipFilename);
+
+        if (!serverSaved) {
+            alert(`Export ZIP downloaded locally, but server save failed: ${serverError ? serverError.message : 'Unknown error'}`);
+        }
+    }
+
     renderMapToCanvas(targetCanvas) {
         const bounds = this.getMapExportBounds();
         if (!bounds || !targetCanvas) return false;
@@ -6708,6 +7919,30 @@ class StoreLayoutViewer {
             document.getElementById('exportMapPngBtn').addEventListener('click', () => {
                 this.exportMapPng();
             });
+
+            const exportSvgBtn = document.getElementById('exportMapSvgBtn');
+            if (exportSvgBtn) {
+                exportSvgBtn.addEventListener('click', async () => {
+                    exportSvgBtn.textContent = 'Exporting…';
+                    exportSvgBtn.disabled = true;
+                    try {
+                        await this.exportMapSvg();
+                        exportSvgBtn.textContent = '✓ Exported';
+                        exportSvgBtn.style.color = 'green';
+                    } catch (error) {
+                        console.error('Failed to export SVG:', error);
+                        alert('Failed to export SVG: ' + (error.message || error));
+                        exportSvgBtn.textContent = 'Export SVG';
+                        exportSvgBtn.style.color = '';
+                    } finally {
+                        exportSvgBtn.disabled = false;
+                        setTimeout(() => {
+                            exportSvgBtn.textContent = 'Export SVG';
+                            exportSvgBtn.style.color = '';
+                        }, 2200);
+                    }
+                });
+            }
 
             document.getElementById('saveJsonBtn').addEventListener('click', async () => {
                 const btn = document.getElementById('saveJsonBtn');
@@ -7962,6 +9197,13 @@ class StoreLayoutViewer {
         const attrs = ann.attributes || (ann.attributes = {});
         attrs.subcategory = this.normalizeSubcategoryValues(attrs.subcategory);
 
+        const labelOptions = this.getAnnotationLabelOptions(ann);
+        if (labelOptions.length > 0) {
+            const labelRow = this.buildAttrRow('attr-row--single');
+            labelRow.appendChild(this.buildAnnotationLabelField(ann, labelOptions));
+            content.appendChild(labelRow);
+        }
+
         // Store-specific Category / Sub-category dropdowns for classifiable annotations.
         if (this.annotationSupportsBusinessCategory(ann)) {
             this.appendBusinessCategoryFields(content, attrs, ann);
@@ -8037,6 +9279,50 @@ class StoreLayoutViewer {
         this.refreshAnnotationAttributeDisplay();
     }
 
+    getAnnotationLabelOptions(ann) {
+        if (!ann || ann.type !== 'bbox') return [];
+
+        const groupName = typeof ann.attribute === 'string' ? ann.attribute.trim() : '';
+        const values = Array.isArray(this.configuredLabelGroups[groupName])
+            ? [...this.configuredLabelGroups[groupName]]
+            : [];
+
+        if (ann.label && !values.includes(ann.label)) {
+            values.unshift(ann.label);
+        }
+
+        return values;
+    }
+
+    buildAnnotationLabelField(ann, options) {
+        const field = document.createElement('div');
+        field.className = 'attr-field';
+
+        const lbl = this.buildAttrFieldLabel('Label / Type');
+        const sel = document.createElement('select');
+        this.populateSelectOptions(sel, options, ann.label || '');
+
+        const handleLabelChange = () => {
+            const nextValue = sel.value;
+            const lastValue = sel.dataset.attrLastValue || '';
+            if (nextValue === lastValue) return;
+
+            this.pushHistory();
+            ann.label = nextValue;
+            ann.level = this.getLevelForGroup(ann.attribute);
+            sel.dataset.attrLastValue = nextValue;
+            this.hasUnsavedChanges = true;
+            this.refreshAnnotationAttributeDisplay();
+        };
+
+        sel.addEventListener('input', handleLabelChange);
+        sel.addEventListener('change', handleLabelChange);
+
+        field.appendChild(lbl);
+        field.appendChild(sel);
+        return field;
+    }
+
     populateSelectOptions(selectEl, options, selectedValue) {
         if (!selectEl) return;
         selectEl.textContent = '';
@@ -8091,10 +9377,18 @@ class StoreLayoutViewer {
                         attrs,
                         'subcategory',
                         ann,
-                        handleAfterChange
+                        handleAfterChange,
+                        {
+                            searchable: true,
+                            searchPlaceholder: this.englishOnly ? 'Search sub-category…' : '搜索 Sub-category…',
+                        }
                     );
                 }
                 handleAfterChange(value);
+            },
+            {
+                searchable: true,
+                searchPlaceholder: this.englishOnly ? 'Search category…' : '搜索 Category…',
             }
         );
         content.appendChild(categoryField);
@@ -8108,6 +9402,8 @@ class StoreLayoutViewer {
             ann,
             handleAfterChange,
             {
+                searchable: true,
+                searchPlaceholder: this.englishOnly ? 'Search sub-category…' : '搜索 Sub-category…',
                 helpUrl: this.getTranslationTableUrl(),
                 helpTitle: 'Open Sub-category translation table',
             }
@@ -8170,23 +9466,24 @@ class StoreLayoutViewer {
         return row;
     }
 
-    populateMultiSelectOptions(field, options, selectedValues, attrs, key, ann, onAfterChange) {
+    populateMultiSelectOptions(field, options, selectedValues, attrs, key, ann, onAfterChange, fieldOptions = {}) {
         if (!field) return;
         const list = field.querySelector('.attr-multiselect-options');
         if (!list) return;
 
         const normalizedSelected = this.normalizeSubcategoryValues(selectedValues);
-        const values = Array.isArray(options) ? [...options] : [];
-        for (const item of normalizedSelected) {
-            if (!values.includes(item)) values.unshift(item);
-        }
+        field._attrAllOptions = Array.isArray(options) ? [...options] : [];
+
+        const searchInput = field.querySelector('.attr-search-input');
+        const searchQuery = field.dataset.attrSearchValue || (searchInput ? searchInput.value : '');
+        const values = this.filterOptionsBySearch(field._attrAllOptions, searchQuery, normalizedSelected);
 
         list.textContent = '';
 
         if (values.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'attr-multiselect-empty';
-            empty.textContent = '—';
+            empty.textContent = searchQuery ? 'No matches' : '—';
             list.appendChild(empty);
             field.dataset.attrLastValue = JSON.stringify([]);
             return;
@@ -8232,20 +9529,75 @@ class StoreLayoutViewer {
         const lbl = this.buildAttrFieldLabel(labelText, labelOptions);
         field.appendChild(lbl);
 
+        if (labelOptions.searchable) {
+            field.classList.add('attr-field--searchable');
+            const searchInput = document.createElement('input');
+            searchInput.type = 'search';
+            searchInput.className = 'attr-search-input';
+            searchInput.placeholder = labelOptions.searchPlaceholder || 'Search…';
+            searchInput.autocomplete = 'off';
+            searchInput.spellcheck = false;
+            searchInput.addEventListener('input', () => {
+                field.dataset.attrSearchValue = searchInput.value;
+                this.populateMultiSelectOptions(
+                    field,
+                    field._attrAllOptions || [],
+                    attrs[key],
+                    attrs,
+                    key,
+                    ann,
+                    onAfterChange,
+                    labelOptions
+                );
+            });
+            field.appendChild(searchInput);
+        }
+
         const list = document.createElement('div');
         list.className = 'attr-multiselect-options';
         field.appendChild(list);
 
-        this.populateMultiSelectOptions(field, options, attrs[key], attrs, key, ann, onAfterChange);
+        this.populateMultiSelectOptions(field, options, attrs[key], attrs, key, ann, onAfterChange, labelOptions);
         return field;
     }
 
-    buildAttrSelect(key, labelText, options, attrs, ann, onAfterChange) {
+    buildAttrSelect(key, labelText, options, attrs, ann, onAfterChange, fieldOptions = {}) {
         const field = document.createElement('div');
         field.className = 'attr-field';
-        const lbl = this.buildAttrFieldLabel(labelText);
+        const lbl = this.buildAttrFieldLabel(labelText, fieldOptions);
         const sel = document.createElement('select');
-        this.populateSelectOptions(sel, options, attrs[key] != null ? attrs[key] : '');
+        const selectedValue = attrs[key] != null ? attrs[key] : '';
+        field._attrAllOptions = Array.isArray(options) ? [...options] : [];
+
+        const refreshSelectOptions = () => {
+            const searchQuery = field.dataset.attrSearchValue || '';
+            const filteredOptions = fieldOptions.searchable
+                ? this.filterOptionsBySearch(field._attrAllOptions, searchQuery, [attrs[key] != null ? attrs[key] : selectedValue])
+                : field._attrAllOptions;
+            this.populateSelectOptions(sel, filteredOptions, attrs[key] != null ? attrs[key] : selectedValue);
+        };
+
+        if (fieldOptions.searchable) {
+            field.classList.add('attr-field--searchable');
+            const searchInput = document.createElement('input');
+            searchInput.type = 'search';
+            searchInput.className = 'attr-search-input';
+            searchInput.placeholder = fieldOptions.searchPlaceholder || 'Search…';
+            searchInput.autocomplete = 'off';
+            searchInput.spellcheck = false;
+            searchInput.addEventListener('input', () => {
+                field.dataset.attrSearchValue = searchInput.value;
+                refreshSelectOptions();
+            });
+            field.appendChild(lbl);
+            field.appendChild(searchInput);
+            field.appendChild(sel);
+        } else {
+            field.appendChild(lbl);
+            field.appendChild(sel);
+        }
+
+        refreshSelectOptions();
         const handleSelectValueChange = () => {
             const nextValue = sel.value;
             const lastValue = sel.dataset.attrLastValue || '';
@@ -8258,8 +9610,6 @@ class StoreLayoutViewer {
         };
         sel.addEventListener('input', handleSelectValueChange);
         sel.addEventListener('change', handleSelectValueChange);
-        field.appendChild(lbl);
-        field.appendChild(sel);
         return field;
     }
 
