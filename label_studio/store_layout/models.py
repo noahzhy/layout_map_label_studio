@@ -43,6 +43,10 @@ class LayoutTask(models.Model):
         S2_IN_PROGRESS = 's2_in_progress', 'S2标注中'
         S2_DONE = 's2_done', 'S2标注完成'
         REVIEWED = 'reviewed', '已审核'
+        MAP_ISSUE = 'map_issue', '地图问题'
+        UNKNOWN_ERROR = 'unknown_error', '未知错误'
+        REVIEW_IN_PROGRESS = 'review_in_progress', '审核中'
+        REVIEW_REJECTED = 'review_rejected', '审核未通过'
 
     @classmethod
     def completed_statuses(cls):
