@@ -40,6 +40,7 @@
                     <button id="redoBtn" title="Redo (Ctrl+Y)">↪</button>
                     <span class="toolbar-separator"></span>
                     <button id="exportMapPngBtn">Export PNG</button>
+                    <button id="exportMapSvgBtn">Export SVG</button>
                     <button id="saveJsonBtn">Save JSON</button>
                 </div>
                 <a href="{% if project %}{% url 'store_layout:project-detail' pk=project.id %}{% else %}{% url 'store_layout:index' %}{% endif %}" style="text-decoration:none">
