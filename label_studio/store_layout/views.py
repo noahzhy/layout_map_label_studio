@@ -256,10 +256,16 @@ def _safe_store_path(store_id):
 
 
 def _is_allowed_export_filename(filename):
-    """Restrict export saves to DoorDash SVG + companion metadata files."""
+    """Restrict export saves to DoorDash SVG, basemap, preview, and metadata files."""
     if not re.match(r'^[\w\-\.]+$', filename):
         return False
-    return filename.endswith('.svg') or filename.endswith('.html') or filename.endswith('.zip') or filename in ALLOWED_EXPORT_FILENAMES
+    return (
+        filename.endswith('.svg')
+        or filename.endswith('.html')
+        or filename.endswith('.zip')
+        or filename.endswith('.png')
+        or filename in ALLOWED_EXPORT_FILENAMES
+    )
 
 
 @csrf_exempt

@@ -4346,7 +4346,7 @@ class StoreLayoutViewer {
     }
 
     getAisleDirectionOptions() {
-        return ['Left', 'Right', 'Top', 'Bottom'];
+        return ['Left', 'Right', 'Top', 'Bottom', 'Both'];
     }
 
     normalizeAisleDirection(value) {
@@ -4357,8 +4357,23 @@ class StoreLayoutViewer {
             right: 'Right',
             top: 'Top',
             bottom: 'Bottom',
+            both: 'Both',
         };
         return map[normalized] || '';
+    }
+
+    inferAisleDirectionFromText(...values) {
+        for (const value of values) {
+            if (typeof value !== 'string') continue;
+            const normalized = value.trim().toLowerCase();
+            if (!normalized) continue;
+            if (/\bboth\b/.test(normalized)) return 'Both';
+            if (/\bleft\b/.test(normalized)) return 'Left';
+            if (/\bright\b/.test(normalized)) return 'Right';
+            if (/\btop\b/.test(normalized)) return 'Top';
+            if (/\bbottom\b/.test(normalized)) return 'Bottom';
+        }
+        return '';
     }
 
     getCategoryColor(label) {
@@ -6346,25 +6361,40 @@ class StoreLayoutViewer {
     getFixtureTypeForExport(label) {
         const normalized = this.sanitizeExportText(label).toLowerCase().replace(/[\s/-]+/g, '_');
         const map = {
-            shelf: 'aisle',
+            shelf: 'shelf',
             aisle: 'aisle',
             wall_shelf: 'wall_shelf',
             island: 'island',
             cooler: 'cooler',
-            refrigerator: 'cooler',
+            refrigerator: 'refrigerator',
             counter: 'counter',
-            endcap: 'other',
+            endcap: 'endcap',
             entrance: 'entrance',
-            exit: 'entrance',
-            entrance_exit: 'entrance',
+            exit: 'exit',
+            entrance_exit: 'entrance_exit',
             checkout: 'checkout_lane',
-            checkout_shelf: 'checkout_lane',
+            checkout_shelf: 'checkout_shelf',
             checkout_lane: 'checkout_lane',
             pharmacy: 'pharmacy',
             restroom: 'restroom',
             other: 'other',
         };
         return map[normalized] || 'other';
+    }
+
+    isWalkableFixtureType(fixtureType) {
+        return ['entrance', 'exit', 'entrance_exit'].includes(String(fixtureType || '').toLowerCase());
+    }
+
+    supportsAisleFixtureMetadata(fixtureType) {
+        return [
+            'shelf',
+            'wall_shelf',
+            'endcap',
+            'checkout_shelf',
+            'cooler',
+            'refrigerator',
+        ].includes(String(fixtureType || '').toLowerCase());
     }
 
     getExportZoneType(label) {
@@ -6376,7 +6406,18 @@ class StoreLayoutViewer {
     }
 
     getExportAisleSide(attrs = {}, fallback = '') {
-        const side = this.sanitizeExportText(this.normalizeAisleDirection(attrs.side) || attrs.side || '');
+        const side = this.sanitizeExportText(
+            this.normalizeAisleDirection(attrs.side)
+            || this.inferAisleDirectionFromText(
+                attrs.side,
+                attrs.notes,
+                attrs.category,
+                attrs.regionType,
+                attrs.label,
+            )
+            || attrs.side
+            || ''
+        );
         return side || fallback;
     }
 
@@ -6386,6 +6427,18 @@ class StoreLayoutViewer {
 
     getExportFixtureName(attrs = {}, fallback = '') {
         return this.sanitizeExportText(attrs.category || fallback || '');
+    }
+
+    getExportSubcategory(attrs = {}) {
+        return this.normalizeSubcategoryValues(attrs && attrs.subcategory)
+            .map(value => this.sanitizeExportText(value))
+            .filter(Boolean)
+            .filter((value, index, values) => values.indexOf(value) === index)
+            .join(', ');
+    }
+
+    getExportBasemapFilename(svgFilename) {
+        return String(svgFilename || 'level-1.svg').replace(/\.svg$/i, '-basemap.png');
     }
 
     getExportIdToken(value, fallback = 'item') {
@@ -6406,7 +6459,7 @@ class StoreLayoutViewer {
         if (attr === 'area' || ann.level === 5) {
             return { layer: 'zones', subtype: 'zone', label };
         }
-        if (normalizedLabel.includes('corridor') || normalizedLabel === 'walk_aisle') {
+        if (attr === 'aisle' || ann.level === 4 || normalizedLabel === 'aisle' || normalizedLabel.includes('corridor') || normalizedLabel === 'walk_aisle') {
             return { layer: 'virtual', subtype: 'walk_corridor', label };
         }
         return { layer: 'fixtures', subtype: this.getFixtureTypeForExport(label || ann.label), label };
@@ -6425,26 +6478,25 @@ class StoreLayoutViewer {
             data['data-is-walkable'] = 'false';
         } else if (layerInfo.layer === 'fixtures') {
             const fixtureType = layerInfo.subtype || 'other';
-            const labelNorm = this.sanitizeExportText(layerInfo.label).toLowerCase().replace(/[\s/-]+/g, '_');
-            const isEntrance = fixtureType === 'entrance' || labelNorm === 'entrance' || labelNorm === 'exit' || labelNorm === 'entrance_exit';
-            const category = this.getExportFixtureName(attrs, fixtureType === 'aisle' ? 'Aisle' : '');
-            const aisle = this.getExportAisleLabel(attrs, sequence);
-            const side = this.getExportAisleSide(attrs, fixtureType === 'aisle' ? 'Both' : '');
+            const category = this.getExportFixtureName(attrs, '');
+            const subcategory = this.getExportSubcategory(attrs);
+            const aisle = this.sanitizeExportText(attrs.aisle || attrs.notes || '');
+            const side = this.getExportAisleSide(attrs, '');
 
             data['data-type'] = 'fixture';
             data['data-fixture-type'] = fixtureType;
-            data['data-is-walkable'] = isEntrance ? 'true' : 'false';
-            if (fixtureType === 'aisle') {
+            data['data-is-walkable'] = this.isWalkableFixtureType(fixtureType) ? 'true' : 'false';
+            if (aisle && this.supportsAisleFixtureMetadata(fixtureType)) {
                 data['data-label'] = aisle;
-                data['data-name'] = category || 'Aisle';
-                data['data-aisle-side'] = side.toLowerCase();
+                if (category) data['data-name'] = category;
+                if (subcategory) data['data-subcategory'] = subcategory;
+                if (side) data['data-aisle-side'] = side.toLowerCase();
             }
         } else if (layerInfo.layer === 'virtual') {
             const aisle = this.getExportAisleLabel(attrs, sequence);
-            data['data-type'] = 'virtual';
-            data['data-virtual-type'] = 'walk_corridor';
+            data['data-type'] = 'walkable_aisle';
             data['data-is-walkable'] = 'true';
-            data['data-aisle-label'] = aisle;
+            if (aisle) data['data-label'] = aisle;
         } else {
             const zoneName = this.sanitizeExportText(attrs.category || layerInfo.label || ann.label || 'Other');
             data['data-type'] = 'zone';
@@ -6460,10 +6512,12 @@ class StoreLayoutViewer {
             const parts = [];
             const fixtureLabel = this.sanitizeExportText(layerInfo.label || ann.label || '');
             const category = this.sanitizeExportText(attrs.category || '');
+            const subcategory = this.getExportSubcategory(attrs);
             const aisle = this.sanitizeExportText(attrs.aisle || attrs.notes || '');
             const side = this.getExportAisleSide(attrs);
             if (fixtureLabel) parts.push(fixtureLabel);
             if (category) parts.push(category);
+            if (subcategory) parts.push(subcategory);
             if (aisle) parts.push(`Aisle ${aisle}`);
             if (side) parts.push(side);
             return parts.join(' · ');
@@ -6473,7 +6527,7 @@ class StoreLayoutViewer {
         }
         if (layerInfo.layer === 'virtual') {
             const aisle = this.sanitizeExportText(attrs.aisle || attrs.notes || '');
-            return aisle ? `Walk Corridor ${aisle}` : 'Walk Corridor';
+            return aisle ? `Walkable Aisle ${aisle}` : 'Walkable Aisle';
         }
         return this.sanitizeExportText(layerInfo.label || ann.label || '');
     }
@@ -6488,11 +6542,17 @@ class StoreLayoutViewer {
         if (layer === 'fixtures') {
             const fixtureColors = {
                 entrance: '#00A3A3',
+                exit: '#009688',
+                entrance_exit: '#00897B',
                 aisle: '#2980b9',
                 cooler: '#42D4F4',
+                refrigerator: '#4FC3F7',
                 checkout_lane: '#F58231',
+                checkout_shelf: '#FB8C00',
+                endcap: '#7E57C2',
                 pharmacy: '#911EB4',
                 restroom: '#469990',
+                shelf: '#3B82F6',
                 wall_shelf: '#4363D8',
             };
             const color = fixtureColors[subtype] || '#2980b9';
@@ -6536,14 +6596,18 @@ class StoreLayoutViewer {
                 baseId = `inner-wall-${this.getExportIdToken(attrs.category || layerInfo.label || idx, String(idx))}`;
             } else if (layerInfo.layer === 'fixtures') {
                 const subtype = layerInfo.subtype || 'other';
-                const subtypeToken = this.getExportIdToken(subtype, 'other');
-                if (subtype === 'aisle') {
-                    const aisle = this.getExportAisleLabel(attrs, idx);
-                    const side = this.getExportAisleSide(attrs, 'Both');
-                    const name = this.getExportFixtureName(attrs, layerInfo.label || ann.label || 'aisle');
-                    baseId = `fx-aisle-${this.getExportIdToken(aisle, String(idx))}-${this.getExportIdToken(side, 'both')}-${this.getExportIdToken(name, 'aisle')}`;
-                } else {
-                    baseId = `fx-${subtypeToken}-${idx}-${this.getExportIdToken(attrs.category || layerInfo.label || ann.label || 'fixture', 'fixture')}`;
+                {
+                    const aisle = this.sanitizeExportText(attrs.aisle || attrs.notes || '');
+                    const side = this.getExportAisleSide(attrs, '');
+                    const name = this.getExportFixtureName(attrs, layerInfo.label || ann.label || 'fixture');
+                    const subcategory = this.getExportSubcategory(attrs);
+                    const idParts = ['fx', subtype];
+                    if (aisle) idParts.push(this.getExportIdToken(aisle, String(idx)));
+                    if (side) idParts.push(this.getExportIdToken(side, 'side'));
+                    idParts.push(String(idx));
+                    idParts.push(this.getExportIdToken(name, 'fixture'));
+                    if (subcategory) idParts.push(this.getExportIdToken(subcategory, 'subcategory'));
+                    baseId = idParts.join('-');
                 }
             } else if (layerInfo.layer === 'virtual') {
                 baseId = `walk-aisle-${this.getExportIdToken(this.getExportAisleLabel(attrs, idx), String(idx))}`;
@@ -6583,6 +6647,8 @@ class StoreLayoutViewer {
                 height: h,
                 points,
                 label,
+                attrs,
+                sequence: identity.index,
                 data,
                 style,
             });
@@ -6592,7 +6658,15 @@ class StoreLayoutViewer {
             if (!Array.isArray(ann.vertices) || ann.vertices.length < 3) return;
             const attrs = ann.attributes && typeof ann.attributes === 'object' ? ann.attributes : {};
             const points = ann.vertices
-                .map(pt => ({ x: Number(pt.x), y: Number(pt.y) }))
+                .map((pt) => {
+                    if (Array.isArray(pt)) {
+                        return { x: Number(pt[0]), y: Number(pt[1]) };
+                    }
+                    if (pt && typeof pt === 'object') {
+                        return { x: Number(pt.x), y: Number(pt.y) };
+                    }
+                    return { x: NaN, y: NaN };
+                })
                 .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
             if (points.length < 3) return;
             const layerInfo = this.getExportLayerInfo(ann, attrs);
@@ -6606,6 +6680,8 @@ class StoreLayoutViewer {
                 shape: 'polygon',
                 points,
                 label: this.getExportElementLabel(ann, attrs, layerInfo),
+                attrs,
+                sequence: identity.index,
                 data: this.buildExportDataAttributes(ann, attrs, elemId, layerInfo, identity.index),
                 style: this.getExportLayerStyle(layerInfo.layer, layerInfo.subtype),
             });
@@ -6709,7 +6785,7 @@ class StoreLayoutViewer {
         return 14;
     }
 
-    buildSvgBasemapPngDataUrl(sourceBounds, maxLongEdge = 2048) {
+    buildSvgBasemapCanvas(sourceBounds, maxLongEdge = 2048) {
         if (!sourceBounds || !Array.isArray(this.pointCloud) || this.pointCloud.length === 0) return '';
         if (typeof document === 'undefined' || typeof document.createElement !== 'function') return '';
 
@@ -6753,10 +6829,114 @@ class StoreLayoutViewer {
         }
 
         ctx.restore();
-        return canvas.toDataURL('image/png');
+        return canvas;
     }
 
-    buildDoorDashSvgExport() {
+    async buildSvgBasemapPngBlob(sourceBounds, maxLongEdge = 2048) {
+        const canvas = this.buildSvgBasemapCanvas(sourceBounds, maxLongEdge);
+        if (!canvas || typeof canvas.toBlob !== 'function') return null;
+        return await new Promise(resolve => canvas.toBlob(blob => resolve(blob), 'image/png'));
+    }
+
+    getExportItemCentroid(item) {
+        if (!item) return null;
+        if (item.shape === 'rect' && Number.isFinite(item.x) && Number.isFinite(item.y)) {
+            return { x: item.x + item.width / 2, y: item.y + item.height / 2 };
+        }
+        const pts = Array.isArray(item.points) ? item.points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)) : [];
+        if (pts.length === 0) return null;
+        if (pts.length < 3) {
+            const sx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+            const sy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+            return { x: sx, y: sy };
+        }
+        let area = 0;
+        let cx = 0;
+        let cy = 0;
+        for (let i = 0; i < pts.length; i++) {
+            const p0 = pts[i];
+            const p1 = pts[(i + 1) % pts.length];
+            const cross = p0.x * p1.y - p1.x * p0.y;
+            area += cross;
+            cx += (p0.x + p1.x) * cross;
+            cy += (p0.y + p1.y) * cross;
+        }
+        area *= 0.5;
+        if (Math.abs(area) < 1e-9) {
+            const sx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+            const sy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+            return { x: sx, y: sy };
+        }
+        return { x: cx / (6 * area), y: cy / (6 * area) };
+    }
+
+    buildExportLabelItems(items) {
+        const labels = [];
+        const usedIds = new Set();
+        const otherCounters = new Map();
+        for (const item of items) {
+            const attrs = item.attrs || {};
+            let text = '';
+            let idPrefix = '';
+            if (!item || (item.layer !== 'fixtures' && item.layer !== 'zones' && item.layer !== 'virtual')) continue;
+            if (item.layer === 'zones') {
+                const zoneName = this.sanitizeExportText((item.data && item.data['data-zone-name']) || attrs.category || item.label || '');
+                if (!zoneName) continue;
+                text = zoneName;
+                const idx = (otherCounters.get('zone') || 0) + 1;
+                otherCounters.set('zone', idx);
+                idPrefix = `lbl-zone-${this.getExportIdToken(zoneName, 'zone')}-${idx}`;
+            } else if (item.layer === 'virtual') {
+                const aisleLabel = this.sanitizeExportText((item.data && item.data['data-label']) || attrs.aisle || attrs.notes || '');
+                if (!aisleLabel) continue;
+                text = aisleLabel;
+                idPrefix = `lbl-aisle-${this.getExportIdToken(aisleLabel, String(item.sequence || 'n'))}`;
+            } else {
+                const fixtureType = item.subtype || (item.data && item.data['data-fixture-type']) || 'other';
+                if (fixtureType === 'aisle') {
+                    const aisleLabel = this.getExportAisleLabel(attrs, item.sequence);
+                    text = aisleLabel;
+                    idPrefix = `lbl-aisle-${this.getExportIdToken(aisleLabel, String(item.sequence || 'n'))}`;
+                } else if (fixtureType === 'entrance' || fixtureType === 'exit' || fixtureType === 'entrance_exit') {
+                    const fixtureTextMap = {
+                        entrance: 'Entrance',
+                        exit: 'Exit',
+                        entrance_exit: 'Entrance/Exit',
+                    };
+                    text = fixtureTextMap[fixtureType] || 'Entrance';
+                    const suffix = String(item.id || '').replace(/^fx-/, '');
+                    idPrefix = `lbl-${fixtureType}-${this.getExportIdToken(suffix, String(item.sequence || 'n'))}`;
+                } else {
+                    const category = this.sanitizeExportText(attrs.category || '');
+                    if (!category) continue;
+                    text = category;
+                    const idx = (otherCounters.get(fixtureType) || 0) + 1;
+                    otherCounters.set(fixtureType, idx);
+                    idPrefix = `lbl-${this.getExportIdToken(fixtureType, 'fixture')}-${this.getExportIdToken(category, 'category')}-${idx}`;
+                }
+            }
+            if (!text) continue;
+            const centroid = this.getExportItemCentroid(item);
+            if (!centroid) continue;
+            let labelId = idPrefix;
+            let suffixCount = 2;
+            while (usedIds.has(labelId)) {
+                labelId = `${idPrefix}-${suffixCount}`;
+                suffixCount += 1;
+            }
+            usedIds.add(labelId);
+            labels.push({
+                id: labelId,
+                text,
+                refId: item.id,
+                x: centroid.x,
+                y: centroid.y,
+            });
+        }
+        return labels;
+    }
+
+    async buildDoorDashSvgExport() {
         const items = this.collectSvgExportItems();
         if (items.length === 0) return null;
 
@@ -6770,13 +6950,15 @@ class StoreLayoutViewer {
         const storeId = this.getExportStoreId();
         const storeName = this.getExportStoreName();
         const filename = `${storeId}-level-1.svg`;
-        const basemapDataUrl = this.buildSvgBasemapPngDataUrl(bounds);
+        const basemapFilename = this.getExportBasemapFilename(filename);
+        const basemapBlob = await this.buildSvgBasemapPngBlob(bounds);
+        const hasBasemap = Boolean(basemapBlob);
         const layerOrder = [
             ['boundary', 'outer-boundary', 'boundary'],
             ['inner-walls', 'layer-inner-walls', 'inner-walls'],
             ['fixtures', 'layer-fixtures', 'fixtures'],
-            ['virtual', 'layer-virtual', 'virtual'],
             ['zones', 'layer-zones', 'zones'],
+            ['virtual', 'layer-virtual', 'virtual'],
         ];
 
         const pointToSvg = (pt) => ({
@@ -6797,7 +6979,7 @@ class StoreLayoutViewer {
 
             const normalizedPoints = item.points.map(pointToSvg);
 
-            if (item.shape === 'rect' && item.layer !== 'boundary') {
+            if (item.shape === 'rect' && item.layer !== 'boundary' && item.layer !== 'virtual') {
                 const x = (item.x - bounds.minX) * scale;
                 const y = (item.y - bounds.minY) * scale;
                 return `    <rect ${this.buildSvgAttributes({
@@ -6835,15 +7017,16 @@ class StoreLayoutViewer {
             `<svg ${this.buildSvgAttributes(rootAttrs)}>`,
             '  <g id="layer-basemap" data-layer="basemap">',
         ];
-        if (basemapDataUrl) {
+        if (hasBasemap) {
             lines.push(`    <image ${this.buildSvgAttributes({
-                href: basemapDataUrl,
+                href: basemapFilename,
                 x: '0',
                 y: '0',
                 width: this.formatSvgNumber(width),
                 height: this.formatSvgNumber(height),
                 preserveAspectRatio: 'none',
                 'data-source': 'point-cloud-png',
+                'data-role': 'qa_alignment_only',
             })}/>`);
         }
         lines.push('  </g>');
@@ -6856,16 +7039,63 @@ class StoreLayoutViewer {
             lines.push('  </g>');
         }
 
+        const labelItems = this.buildExportLabelItems(items);
+        const labelFontSize = Math.max(Math.max(width, height) * 0.006, 0.05);
         lines.push('  <g id="layer-labels" data-layer="labels">');
+        for (const label of labelItems) {
+            const lx = (label.x - bounds.minX) * scale;
+            const ly = (label.y - bounds.minY) * scale;
+            const attrs = {
+                id: label.id,
+                'data-id': label.id,
+                'data-type': 'label',
+                'data-ref-ids': label.refId,
+                x: this.formatSvgNumber(lx),
+                y: this.formatSvgNumber(ly),
+                'text-anchor': 'middle',
+                'dominant-baseline': 'middle',
+                'font-size': this.formatSvgNumber(labelFontSize),
+                'font-family': 'sans-serif',
+                fill: '#111',
+                'pointer-events': 'none',
+            };
+            lines.push(`    <text ${this.buildSvgAttributes(attrs)}>${this.escapeXml(label.text)}</text>`);
+        }
         lines.push('  </g>');
         lines.push('</svg>');
 
         const svg = lines.join('\n') + '\n';
-        const metadata = this.buildStoreMetadataExport(filename, width, height, unitInfo, bounds, items.length, Boolean(basemapDataUrl));
-        return { svg, metadata, svgFilename: filename, metadataFilename: 'store-metadata.json', itemCount: items.length };
+        const layerCounts = {
+            basemap: hasBasemap ? 1 : 0,
+            boundary: items.filter(item => item.layer === 'boundary').length,
+            'inner-walls': items.filter(item => item.layer === 'inner-walls').length,
+            fixtures: items.filter(item => item.layer === 'fixtures').length,
+            zones: items.filter(item => item.layer === 'zones').length,
+            virtual: items.filter(item => item.layer === 'virtual').length,
+            labels: labelItems.length,
+        };
+        const metadata = this.buildStoreMetadataExport(
+            filename,
+            width,
+            height,
+            unitInfo,
+            bounds,
+            items.length,
+            hasBasemap ? basemapFilename : null,
+            layerCounts
+        );
+        return {
+            svg,
+            metadata,
+            svgFilename: filename,
+            basemapFilename: hasBasemap ? basemapFilename : null,
+            basemapBlob: hasBasemap ? basemapBlob : null,
+            metadataFilename: 'store-metadata.json',
+            itemCount: items.length,
+        };
     }
 
-    buildStoreMetadataExport(svgFilename, width, height, unitInfo, sourceBounds, itemCount, hasEmbeddedBasemap = false) {
+    buildStoreMetadataExport(svgFilename, width, height, unitInfo, sourceBounds, itemCount, basemapFilename = null, layerCounts = {}) {
         const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
         const coordinateSystem = {
             origin: 'top_left',
@@ -6899,12 +7129,14 @@ class StoreLayoutViewer {
                 level_label: 'Ground Floor',
                 is_default: true,
                 svg_file: svgFilename,
-                basemap_embedded: hasEmbeddedBasemap,
-                basemap_source: hasEmbeddedBasemap ? 'point-cloud-png' : null,
-                basemap_role: hasEmbeddedBasemap ? 'qa_alignment_only' : null,
+                basemap_embedded: false,
+                basemap_file: basemapFilename,
+                basemap_source: basemapFilename ? 'point-cloud-png' : null,
+                basemap_role: basemapFilename ? 'qa_alignment_only' : null,
                 width,
                 height,
             }],
+            layer_counts: layerCounts,
             source: {
                 vendor: 'clobotics',
                 ingested_at: now,
@@ -6950,6 +7182,11 @@ class StoreLayoutViewer {
         .layer-name { flex: 1; }
         .layer-count { min-width: 28px; border-radius: 999px; padding: 1px 7px; background: #ead9b9; color: #5a4933; text-align: center; font-size: 11px; font-weight: 700; }
         .inspect-help { color: #7a6a55; font-size: 12px; line-height: 1.45; }
+        .inspect-card { display: grid; gap: 8px; }
+        .inspect-title { font-size: 13px; font-weight: 800; color: #3c2f20; }
+        .inspect-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+        .inspect-badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 3px 8px; background: #efe1c8; color: #4f3d2a; font-size: 11px; font-weight: 700; }
+        .inspect-badge strong { color: #2f2418; }
         .attr-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
         .attr-table th, .attr-table td { padding: 5px 4px; border-bottom: 1px solid #ead9b9; vertical-align: top; word-break: break-word; }
         .attr-table th { width: 44%; color: #6f604d; text-align: left; font-weight: 700; }
@@ -6959,6 +7196,8 @@ class StoreLayoutViewer {
         .svg-wrap { min-width: 100%; min-height: 100%; width: max-content; height: max-content; display: flex; align-items: flex-start; justify-content: center; padding: 24px; }
         .export-svg { display: block; flex: 0 0 auto; background: white; border-radius: 6px; box-shadow: 0 4px 18px rgba(0,0,0,.10); }
         .export-svg [data-id] { cursor: pointer; }
+        .export-svg polygon { vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; stroke-opacity: 1 !important; stroke-width: max(0.06px, 1.25px) !important; }
+        .export-svg [data-type="boundary"] { stroke-width: 3px !important; vector-effect: non-scaling-stroke; }
         .export-svg .preview-selected { outline: none; stroke: #ff2f00 !important; stroke-width: max(0.06px, 2px) !important; vector-effect: non-scaling-stroke; }
         code { background: #efe1c8; border-radius: 4px; padding: 2px 5px; }
         @media (max-width: 760px) {
@@ -6996,7 +7235,7 @@ class StoreLayoutViewer {
             </div>
             <div class="panel-section">
                 <p class="section-title">Selected Element</p>
-                <div id="inspector" class="inspect-help">Click a boundary, wall, fixture, zone, or virtual corridor to inspect its id and data-* attributes.</div>
+                <div id="inspector" class="inspect-help">Click a boundary, wall, fixture, walkable aisle, zone, or label to inspect its id and data-* attributes.</div>
             </div>
         </aside>
         <div class="canvas" id="canvas">
@@ -7017,20 +7256,20 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             if (!canvas || !wrap || !svg || !layerList || !summaryGrid || !inspector) return;
 
             svg.classList.add('export-svg');
-            const viewBox = (svg.getAttribute('viewBox') || '0 0 1 1').trim().split(/\s+/).map(Number);
+            const viewBox = (svg.getAttribute('viewBox') || '0 0 1 1').trim().split(/\\s+/).map(Number);
             const vbWidth = Number.isFinite(viewBox[2]) && viewBox[2] > 0 ? viewBox[2] : Number(svg.getAttribute('width')) || 1;
             const vbHeight = Number.isFinite(viewBox[3]) && viewBox[3] > 0 ? viewBox[3] : Number(svg.getAttribute('height')) || 1;
             const layerLabels = {
-                basemap: 'Basemap / point cloud',
+                basemap: 'Basemap / PNG',
                 boundary: 'Boundary',
                 'inner-walls': 'Inner walls',
                 fixtures: 'Fixtures',
-                virtual: 'Virtual',
                 zones: 'Zones',
+                virtual: 'Walkable aisles',
                 labels: 'Labels'
             };
             const defaultVisible = { labels: false };
-            const layerOrder = ['basemap', 'boundary', 'inner-walls', 'fixtures', 'virtual', 'zones', 'labels'];
+            const layerOrder = ['basemap', 'boundary', 'inner-walls', 'fixtures', 'zones', 'virtual', 'labels'];
             const layers = new Map();
             Array.from(svg.querySelectorAll('g[data-layer]')).forEach(function (group) {
                 const key = group.getAttribute('data-layer');
@@ -7055,14 +7294,20 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             }
 
             const fixtureNodes = Array.from(svg.querySelectorAll('[data-type="fixture"]'));
+            const basemapImage = svg.querySelector('[data-layer="basemap"] image');
+            const walkableAisleNodes = Array.from(svg.querySelectorAll('[data-type="walkable_aisle"]'));
+            const aisleBoundFixtureNodes = fixtureNodes.filter(function (el) { return !!el.getAttribute('data-label'); });
             setSummary('Schema', svg.getAttribute('data-schema') || '—');
             setSummary('Store', svg.getAttribute('data-store-id') || '—');
             setSummary('Units', svg.getAttribute('data-units') || '—');
             setSummary('viewBox', svg.getAttribute('viewBox') || '—');
+            setSummary('Basemap', basemapImage ? (basemapImage.getAttribute('href') || 'external image') : '—');
             setSummary('Fixtures', String(fixtureNodes.length));
-            setSummary('Aisles', String(fixtureNodes.filter(function (el) { return el.getAttribute('data-fixture-type') === 'aisle'; }).length));
+            setSummary('Walkable aisles', String(walkableAisleNodes.length));
+            setSummary('Aisle-bound fixtures', String(aisleBoundFixtureNodes.length));
             setSummary('Zones', String(svg.querySelectorAll('[data-type="zone"]').length));
-            setSummary('Virtual', String(svg.querySelectorAll('[data-type="virtual"]').length));
+            setSummary('Layer 4', String(walkableAisleNodes.length));
+            setSummary('Labels', String(svg.querySelectorAll('[data-type="label"]').length));
 
             layerOrder.filter(function (key) { return layers.has(key); }).forEach(function (key) {
                 const item = document.createElement('label');
@@ -7100,10 +7345,45 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             function renderInspector(el) {
                 if (!el) {
                     inspector.className = 'inspect-help';
-                    inspector.textContent = 'Click a boundary, wall, fixture, zone, or virtual corridor to inspect its id and data-* attributes.';
+                    inspector.textContent = 'Click a boundary, wall, fixture, walkable aisle, zone, or label to inspect its id and data-* attributes.';
                     return;
                 }
-                inspector.className = '';
+                inspector.className = 'inspect-card';
+                const wrap = document.createElement('div');
+                wrap.className = 'inspect-card';
+                const title = document.createElement('div');
+                title.className = 'inspect-title';
+                title.textContent = el.getAttribute('id') || 'Selected element';
+                wrap.appendChild(title);
+
+                const badges = document.createElement('div');
+                badges.className = 'inspect-badges';
+                const badgeEntries = [
+                    ['data-type', el.getAttribute('data-type')],
+                    ['data-fixture-type', el.getAttribute('data-fixture-type')],
+                    ['data-zone-type', el.getAttribute('data-zone-type')],
+                    ['data-label', el.getAttribute('data-label')],
+                    ['data-aisle-side', el.getAttribute('data-aisle-side')],
+                    ['data-type', el.getAttribute('data-type') === 'walkable_aisle' ? 'walkable_aisle' : ''],
+                ].filter(function (entry, index, list) {
+                    if (!entry[1]) return false;
+                    return list.findIndex(function (item) {
+                        return item[0] === entry[0] && item[1] === entry[1];
+                    }) === index;
+                });
+                badgeEntries.forEach(function (entry) {
+                    const badge = document.createElement('span');
+                    badge.className = 'inspect-badge';
+                    const strong = document.createElement('strong');
+                    strong.textContent = entry[0] + ':';
+                    const value = document.createElement('span');
+                    value.textContent = entry[1];
+                    badge.appendChild(strong);
+                    badge.appendChild(value);
+                    badges.appendChild(badge);
+                });
+                if (badges.children.length) wrap.appendChild(badges);
+
                 const table = document.createElement('table');
                 table.className = 'attr-table';
                 const attrs = Array.from(el.attributes)
@@ -7123,7 +7403,8 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
                     tr.appendChild(td);
                     table.appendChild(tr);
                 });
-                inspector.replaceChildren(table);
+                wrap.appendChild(table);
+                inspector.replaceChildren(wrap);
             }
 
             Array.from(svg.querySelectorAll('[data-id]')).forEach(function (el) {
@@ -7327,7 +7608,21 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         out.push(value & 0xFF, (value >>> 8) & 0xFF, (value >>> 16) & 0xFF, (value >>> 24) & 0xFF);
     }
 
-    createZipBlob(files) {
+    async getZipContentBytes(content) {
+        const encoder = new TextEncoder();
+        if (typeof content === 'string') return encoder.encode(content);
+        if (content instanceof Uint8Array) return content;
+        if (content instanceof ArrayBuffer) return new Uint8Array(content);
+        if (ArrayBuffer.isView(content)) {
+            return new Uint8Array(content.buffer, content.byteOffset, content.byteLength);
+        }
+        if (typeof Blob !== 'undefined' && content instanceof Blob) {
+            return new Uint8Array(await content.arrayBuffer());
+        }
+        return encoder.encode(String(content === undefined || content === null ? '' : content));
+    }
+
+    async createZipBlob(files) {
         const encoder = new TextEncoder();
         const localParts = [];
         const centralParts = [];
@@ -7336,7 +7631,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
 
         for (const file of files) {
             const nameBytes = encoder.encode(file.name);
-            const dataBytes = encoder.encode(file.content);
+            const dataBytes = await this.getZipContentBytes(file.content);
             const crc = this.crc32(dataBytes);
             const local = [];
             this.writeZipUint32(local, 0x04034b50);
@@ -7390,7 +7685,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
     }
 
     async exportMapSvg() {
-        const exportPayload = this.buildDoorDashSvgExport();
+        const exportPayload = await this.buildDoorDashSvgExport();
         if (!exportPayload) {
             alert('No annotations available to export as SVG.');
             return;
@@ -7401,16 +7696,25 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         const previewHtml = this.buildSvgPreviewHtml(exportPayload.svgFilename, exportPayload.svg, exportPayload.metadata);
         const zipFilename = exportPayload.svgFilename.replace(/\.svg$/i, '.zip');
         const packageFolder = `${this.getExportIdToken(this.getExportStoreId(), 'store')}/`;
-        const zipBlob = this.createZipBlob([
+        const zipFiles = [
             { name: `${packageFolder}${exportPayload.svgFilename}`, content: exportPayload.svg },
+        ];
+        if (exportPayload.basemapBlob && exportPayload.basemapFilename) {
+            zipFiles.push({ name: `${packageFolder}${exportPayload.basemapFilename}`, content: exportPayload.basemapBlob });
+        }
+        zipFiles.push(
             { name: `${packageFolder}${exportPayload.metadataFilename}`, content: metadataJson },
             { name: `${packageFolder}${previewFilename}`, content: previewHtml },
-        ]);
+        );
+        const zipBlob = await this.createZipBlob(zipFiles);
         let serverSaved = false;
         let serverError = null;
 
         try {
             await this.saveExportTextPayload(exportPayload.svgFilename, exportPayload.svg);
+            if (exportPayload.basemapBlob && exportPayload.basemapFilename) {
+                await this.saveExportBlobPayload(exportPayload.basemapFilename, exportPayload.basemapBlob);
+            }
             await this.saveExportTextPayload(exportPayload.metadataFilename, metadataJson);
             await this.saveExportTextPayload(previewFilename, previewHtml);
             await this.saveExportBlobPayload(zipFilename, zipBlob);

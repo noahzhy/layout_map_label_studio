@@ -31,14 +31,7 @@ labels:
     - Aisle
 
   area:
-    - Grocery Area
-    - Produce Area
-    - Dairy Area
-    - Frozen Area
-    - Alcohol Area
-    - Bakery Area
-    - Deli Area
-    - Meat Area
+    - None
 
   category:
     - No Longer Supported
