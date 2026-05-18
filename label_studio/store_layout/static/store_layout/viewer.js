@@ -6372,9 +6372,8 @@ class StoreLayoutViewer {
             entrance: 'entrance',
             exit: 'exit',
             entrance_exit: 'entrance_exit',
-            checkout: 'checkout_lane',
+            checkout: 'checkout',
             checkout_shelf: 'checkout_shelf',
-            checkout_lane: 'checkout_lane',
             pharmacy: 'pharmacy',
             restroom: 'restroom',
             other: 'other',
@@ -6547,7 +6546,7 @@ class StoreLayoutViewer {
                 aisle: '#2980b9',
                 cooler: '#42D4F4',
                 refrigerator: '#4FC3F7',
-                checkout_lane: '#F58231',
+                checkout: '#F58231',
                 checkout_shelf: '#FB8C00',
                 endcap: '#7E57C2',
                 pharmacy: '#911EB4',
@@ -6906,10 +6905,17 @@ class StoreLayoutViewer {
                     text = fixtureTextMap[fixtureType] || 'Entrance';
                     const suffix = String(item.id || '').replace(/^fx-/, '');
                     idPrefix = `lbl-${fixtureType}-${this.getExportIdToken(suffix, String(item.sequence || 'n'))}`;
+                } else if (fixtureType === 'restroom' || fixtureType === 'pharmacy' || fixtureType === 'checkout') {
+                    text = this.sanitizeExportText(item.label || fixtureType);
+                    if (!text) continue;
+                    const suffix = String(item.id || '').replace(/^fx-/, '');
+                    idPrefix = `lbl-${fixtureType}-${this.getExportIdToken(suffix, String(item.sequence || 'n'))}`;
                 } else {
                     const category = this.sanitizeExportText(attrs.category || '');
                     if (!category) continue;
-                    text = category;
+                    text = fixtureType && fixtureType !== 'other'
+                        ? `${fixtureType} · ${category}`
+                        : category;
                     const idx = (otherCounters.get(fixtureType) || 0) + 1;
                     otherCounters.set(fixtureType, idx);
                     idPrefix = `lbl-${this.getExportIdToken(fixtureType, 'fixture')}-${this.getExportIdToken(category, 'category')}-${idx}`;
@@ -7184,6 +7190,7 @@ class StoreLayoutViewer {
         .inspect-help { color: #7a6a55; font-size: 12px; line-height: 1.45; }
         .inspect-card { display: grid; gap: 8px; }
         .inspect-title { font-size: 13px; font-weight: 800; color: #3c2f20; }
+        .inspect-primary { font-size: 11px; color: #5f4b35; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.45; }
         .inspect-badges { display: flex; flex-wrap: wrap; gap: 6px; }
         .inspect-badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 3px 8px; background: #efe1c8; color: #4f3d2a; font-size: 11px; font-weight: 700; }
         .inspect-badge strong { color: #2f2418; }
@@ -7256,6 +7263,27 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             if (!canvas || !wrap || !svg || !layerList || !summaryGrid || !inspector) return;
 
             svg.classList.add('export-svg');
+
+            Array.from(svg.querySelectorAll('[data-id]')).forEach(function (el) {
+                const titleParts = [
+                    ['data-fixture-type', el.getAttribute('data-fixture-type')],
+                    ['data-type', el.getAttribute('data-type')],
+                    ['data-label', el.getAttribute('data-label')],
+                    ['data-aisle-side', el.getAttribute('data-aisle-side')],
+                ].filter(function (entry) { return !!entry[1]; });
+                if (!titleParts.length) return;
+                let titleNode = Array.from(el.children || []).find(function (child) {
+                    return child && child.tagName && child.tagName.toLowerCase() === 'title';
+                });
+                if (!titleNode) {
+                    titleNode = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                    el.insertBefore(titleNode, el.firstChild || null);
+                }
+                titleNode.textContent = titleParts.map(function (entry) {
+                    return entry[0] + '=' + entry[1];
+                }).join(' · ');
+            });
+
             const viewBox = (svg.getAttribute('viewBox') || '0 0 1 1').trim().split(/\\s+/).map(Number);
             const vbWidth = Number.isFinite(viewBox[2]) && viewBox[2] > 0 ? viewBox[2] : Number(svg.getAttribute('width')) || 1;
             const vbHeight = Number.isFinite(viewBox[3]) && viewBox[3] > 0 ? viewBox[3] : Number(svg.getAttribute('height')) || 1;
@@ -7355,6 +7383,20 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
                 title.className = 'inspect-title';
                 title.textContent = el.getAttribute('id') || 'Selected element';
                 wrap.appendChild(title);
+
+                const primaryEntries = [
+                    ['data-fixture-type', el.getAttribute('data-fixture-type')],
+                    ['data-label', el.getAttribute('data-label')],
+                    ['data-aisle-side', el.getAttribute('data-aisle-side')],
+                ].filter(function (entry) { return !!entry[1]; });
+                if (primaryEntries.length) {
+                    const primary = document.createElement('div');
+                    primary.className = 'inspect-primary';
+                    primary.textContent = primaryEntries.map(function (entry) {
+                        return entry[0] + '=' + entry[1];
+                    }).join(' · ');
+                    wrap.appendChild(primary);
+                }
 
                 const badges = document.createElement('div');
                 badges.className = 'inspect-badges';
