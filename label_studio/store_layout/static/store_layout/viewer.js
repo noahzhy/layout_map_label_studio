@@ -4587,6 +4587,7 @@ class StoreLayoutViewer {
             'refrigerator',
             'checkout_shelf',
             'island',
+            'counter',
             'cooler',
         ].includes(typeKey);
     }
