@@ -271,7 +271,8 @@ class StoreLayoutViewer {
         this.configuredLabelGroupNames = []; // ordered group names
         this.configuredLabelGroupMeta = {};  // { groupName: {type, level, color} } from label_metadata
         this.businessCategoryStores = []; // [{ name, categories, categoryOrder, categoryIndex }] from business_l1_l2.yaml
-        this.businessCategoryStoreIndex = new Map(); // normalized storeName -> store entry
+        this.businessCategoryStoreIndex = new Map(); // normalized exact storeName -> store entry
+        this.businessCategoryStorePrefixIndex = new Map(); // normalized first 4 chars -> first matching store entry
         this.categoryColorPalette = [
             '#FF0000', '#00FF00', '#0000FF', '#FFFF00',
             '#FF00FF', '#00FFFF', '#FFA500', '#800080',
@@ -4166,11 +4167,17 @@ class StoreLayoutViewer {
             const stores = this.parseBusinessCategoryYaml(text);
             this.businessCategoryStores = stores;
             this.businessCategoryStoreIndex = new Map();
+            this.businessCategoryStorePrefixIndex = new Map();
 
             for (const store of stores) {
-                const key = this.normalizeLabelKey(store.name);
-                if (key && !this.businessCategoryStoreIndex.has(key)) {
-                    this.businessCategoryStoreIndex.set(key, store);
+                const exactKey = this.normalizeBusinessStoreKey(store.name);
+                if (exactKey && !this.businessCategoryStoreIndex.has(exactKey)) {
+                    this.businessCategoryStoreIndex.set(exactKey, store);
+                }
+
+                const prefixKey = this.normalizeBusinessStorePrefixKey(store.name);
+                if (prefixKey && !this.businessCategoryStorePrefixIndex.has(prefixKey)) {
+                    this.businessCategoryStorePrefixIndex.set(prefixKey, store);
                 }
             }
 
@@ -4278,6 +4285,15 @@ class StoreLayoutViewer {
         return typeof label === 'string' ? label.trim().toLowerCase() : '';
     }
 
+    normalizeBusinessStoreKey(storeName) {
+        return typeof storeName === 'string' ? storeName.trim().toLowerCase() : '';
+    }
+
+    normalizeBusinessStorePrefixKey(storeName) {
+        const normalized = this.normalizeBusinessStoreKey(storeName);
+        return normalized ? normalized.slice(0, 4) : '';
+    }
+
     getConfiguredCategoryLabels() {
         return Array.isArray(this.configuredLabelGroups.category)
             ? this.configuredLabelGroups.category
@@ -4297,9 +4313,15 @@ class StoreLayoutViewer {
 
     getCurrentBusinessCategoryStore() {
         const storeName = this.getCurrentBusinessStoreName();
-        const normalized = this.normalizeLabelKey(storeName);
-        if (!normalized) return null;
-        return this.businessCategoryStoreIndex.get(normalized) || null;
+        const exactKey = this.normalizeBusinessStoreKey(storeName);
+        if (!exactKey) return null;
+
+        const exactMatch = this.businessCategoryStoreIndex.get(exactKey);
+        if (exactMatch) return exactMatch;
+
+        const prefixKey = this.normalizeBusinessStorePrefixKey(storeName);
+        if (!prefixKey) return null;
+        return this.businessCategoryStorePrefixIndex.get(prefixKey) || null;
     }
 
     getBusinessCategoryOptions() {
