@@ -1591,9 +1591,30 @@ input[type="checkbox"]:focus-visible {
 }
 
 .annotation-box--selected {
+    box-shadow: 0 0 0 2px rgba(240, 160, 48, 0.2);
+}
+
+.annotation-box--selected:not(.annotation-box--has-issue) {
     border-color: rgba(240, 160, 48, 0.8);
     background: rgba(240, 160, 48, 0.06);
-    box-shadow: 0 0 0 2px rgba(240, 160, 48, 0.2);
+}
+
+.annotation-box--has-issue {
+    backdrop-filter: saturate(1.05);
+}
+
+.annotation-box--issue-missing-taxonomy {
+    box-shadow: inset 0 0 0 1px rgba(217, 48, 37, 0.22);
+}
+
+.annotation-box--issue-missing-aisle-binding {
+    box-shadow: inset 0 0 0 1px rgba(139, 69, 19, 0.24);
+}
+
+.annotation-box--selected.annotation-box--has-issue {
+    box-shadow:
+        0 0 0 2px rgba(240, 160, 48, 0.24),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.20);
 }
 
 .annotation-box .annotation-label {
@@ -1641,7 +1662,7 @@ input[type="checkbox"]:focus-visible {
     color: #fff;
 }
 
-.annotation-box--selected .annotation-label {
+.annotation-box--selected:not(.annotation-box--has-issue) .annotation-label {
     --annotation-label-color: #f0a030;
     color: #fff;
 }
@@ -1698,9 +1719,24 @@ input[type="checkbox"]:focus-visible {
 }
 
 .split-region--selected {
+    box-shadow: inset 0 0 0 2px rgba(240, 160, 48, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.32);
+}
+
+.split-region--selected:not(.split-region--has-issue) {
     background: rgba(240, 160, 48, 0.14);
     border-color: rgba(240, 160, 48, 0.95);
-    box-shadow: inset 0 0 0 2px rgba(240, 160, 48, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.32);
+}
+
+.split-region--issue-missing-taxonomy {
+    box-shadow: inset 0 0 0 1px rgba(217, 48, 37, 0.22);
+}
+
+.split-region--issue-missing-aisle-binding {
+    box-shadow: inset 0 0 0 1px rgba(139, 69, 19, 0.24);
+}
+
+.split-region--selected.split-region--has-issue {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.34), 0 0 0 3px rgba(240, 160, 48, 0.18);
 }
 
 .split-region-label {
@@ -1735,8 +1771,8 @@ input[type="checkbox"]:focus-visible {
     transform: translate(-50%, -50%);
 }
 
-.split-region--selected .split-region-label {
-    --split-region-label-color: #f0a030;
+.split-region--selected:not(.split-region--has-issue) .split-region-label {
+    -webkit-text-stroke: 4px #f0a030;
     color: #fff;
 }
 

@@ -4566,6 +4566,128 @@ class StoreLayoutViewer {
         };
     }
 
+    normalizeFixtureTypeKey(label) {
+        return this.normalizeLabelKey(label).replace(/[\s/-]+/g, '_');
+    }
+
+    isShelfFacingFixtureType(label) {
+        const typeKey = this.normalizeFixtureTypeKey(label);
+        return typeKey === 'shelf' || typeKey === 'wall_shelf';
+    }
+
+    normalizeValidationTextValue(value) {
+        return value === null || value === undefined ? '' : String(value).trim();
+    }
+
+    requiresTaxonomyValidation(typeKey) {
+        return [
+            'shelf',
+            'wall_shelf',
+            'endcap',
+            'refrigerator',
+            'checkout_shelf',
+            'island',
+            'cooler',
+        ].includes(typeKey);
+    }
+
+    requiresAisleBindingValidation(typeKey) {
+        return ['shelf', 'wall_shelf'].includes(typeKey);
+    }
+
+    hasExplicitShelfDirectionValue(value) {
+        const normalized = this.normalizeValidationTextValue(value).toLowerCase();
+        return ['left', 'right', 'top', 'bottom', 'front', 'back'].includes(normalized);
+    }
+
+    getShelfBindingValue(attrs = {}, source = 'annotation') {
+        const candidates = source === 'split-region'
+            ? [attrs.aisle, attrs.notes, attrs.shelfNumber]
+            : [attrs.shelfNumber, attrs.aisle];
+
+        for (const candidate of candidates) {
+            const normalized = this.normalizeValidationTextValue(candidate);
+            if (normalized) return normalized;
+        }
+
+        return '';
+    }
+
+    isMissingTaxonomySelection(attrs = {}) {
+        const category = this.normalizeValidationTextValue(attrs.category);
+        const subcategory = this.normalizeSubcategoryValues(attrs.subcategory);
+        return !category || subcategory.length === 0;
+    }
+
+    isMissingShelfBinding(attrs = {}, source = 'annotation') {
+        return !this.hasExplicitShelfDirectionValue(attrs.side)
+            || !this.getShelfBindingValue(attrs, source);
+    }
+
+    getValidationIssueStateForLabel(label, attrs = {}, source = 'annotation') {
+        const typeKey = this.normalizeFixtureTypeKey(label);
+        if (!typeKey) return null;
+
+        if (this.requiresTaxonomyValidation(typeKey) && this.isMissingTaxonomySelection(attrs)) {
+            return 'missing-taxonomy';
+        }
+
+        if (this.requiresAisleBindingValidation(typeKey) && this.isMissingShelfBinding(attrs, source)) {
+            return 'missing-aisle-binding';
+        }
+
+        return null;
+    }
+
+    getAnnotationValidationState(ann) {
+        if (!ann || ann.type !== 'bbox') return null;
+        return this.getValidationIssueStateForLabel(ann.label, ann.attributes || {}, 'annotation');
+    }
+
+    getSplitRegionValidationState(leaf) {
+        const attrs = leaf && leaf.attributes ? leaf.attributes : {};
+        return this.getValidationIssueStateForLabel(attrs.regionType || attrs.label || '', attrs, 'split-region');
+    }
+
+    getValidationIssueTheme(issueState) {
+        const accentColor = issueState === 'missing-taxonomy'
+            ? '#d93025'
+            : issueState === 'missing-aisle-binding'
+                ? '#8b4513'
+                : '';
+
+        if (!accentColor) return null;
+
+        return {
+            accentColor,
+            borderColor: accentColor,
+            backgroundColor: this.hexToRgba(accentColor, issueState === 'missing-taxonomy' ? 0.10 : 0.12),
+            labelColor: accentColor,
+        };
+    }
+
+    applyAnnotationIssueTheme(issueState, boxEl, labelEl) {
+        const theme = this.getValidationIssueTheme(issueState);
+        if (!theme || !boxEl || !labelEl) return;
+
+        boxEl.dataset.validationState = issueState;
+        boxEl.classList.add('annotation-box--has-issue', `annotation-box--issue-${issueState}`);
+        boxEl.style.setProperty('--annotation-border-color', theme.borderColor);
+        boxEl.style.setProperty('--annotation-box-bg', theme.backgroundColor);
+        labelEl.style.setProperty('--annotation-label-color', theme.labelColor);
+    }
+
+    applySplitRegionIssueTheme(issueState, regionEl, labelEl) {
+        const theme = this.getValidationIssueTheme(issueState);
+        if (!theme || !regionEl || !labelEl) return;
+
+        regionEl.dataset.validationState = issueState;
+        regionEl.classList.add('split-region--has-issue', `split-region--issue-${issueState}`);
+        regionEl.style.borderColor = theme.borderColor;
+        regionEl.style.background = theme.backgroundColor;
+        regionEl.style.setProperty('--split-region-label-color', theme.labelColor);
+    }
+
     getAnnotationLabelLayout(label, boxWidthPx, boxHeightPx) {
         const text = typeof label === 'string' ? label.trim() : '';
         if (!text) {
@@ -4960,7 +5082,7 @@ class StoreLayoutViewer {
             const { x, y, width, height } = this.pendingBox;
             const attrs = {};
             // Auto-number Shelf
-            if (label === 'Shelf' || label === 'Wall shelf') {
+            if (this.isShelfFacingFixtureType(label)) {
                 attrs.shelfNumber = this.getNextShelfNumber();
                 attrs.side = 'Both';
             }
@@ -5418,6 +5540,10 @@ class StoreLayoutViewer {
                 text.style.color = splitTheme.labelTextColor || '#fff';
             }
             this.applySplitRegionLabelLayout(text, regionLabel, r.width, r.height);
+            const issueState = this.getSplitRegionValidationState(leaf);
+            if (issueState) {
+                this.applySplitRegionIssueTheme(issueState, region, text);
+            }
             region.appendChild(text);
 
             region.addEventListener('mousedown', (e) => {
@@ -6002,7 +6128,10 @@ class StoreLayoutViewer {
         }
         this.populateAnnotationLabelContent(labelEl, labelText, labelLayout.orientation);
 
-        if (box.id !== this.selectedAnnotation) {
+        const issueState = box.id !== undefined ? this.getAnnotationValidationState(box) : null;
+        if (issueState) {
+            this.applyAnnotationIssueTheme(issueState, el, labelEl);
+        } else if (box.id !== this.selectedAnnotation) {
             this.applyAnnotationBoxColors(box, el, labelEl);
         }
 
@@ -9578,7 +9707,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         }
 
         // Shelf-specific fields
-        if (ann.label === 'Shelf' || ann.label === 'Wall shelf') {
+        if (this.isShelfFacingFixtureType(ann.label)) {
             content.appendChild(this.buildAttrInput('shelfNumber', 'Shelf #', 'aisle', attrs, ann));
             // For horizontal shelves (width > height), use Front/Back instead of Left/Right
             const isHorizontal = Math.abs(ann.width) > Math.abs(ann.height);
@@ -9985,7 +10114,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
     getNextShelfNumber() {
         let max = 0;
         for (const a of this.annotations) {
-            if ((a.label === 'Shelf' || a.label === 'Wall shelf') && a.attributes && a.attributes.shelfNumber != null) {
+            if (this.isShelfFacingFixtureType(a.label) && a.attributes && a.attributes.shelfNumber != null) {
                 const n = parseInt(a.attributes.shelfNumber, 10);
                 if (!isNaN(n)) max = Math.max(max, n);
             }
