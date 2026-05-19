@@ -185,5 +185,14 @@ USER 1001
 
 EXPOSE 8080
 
+# Support all image startup modes used in this repository:
+# - default CMD ["label-studio"]        -> http://127.0.0.1:8080/health
+# - command: label-studio-uwsgi         -> http://127.0.0.1:8000/health
+# - command: nginx                      -> http://127.0.0.1:8085/nginx_health
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/health >/dev/null || \
+        curl -fsS http://127.0.0.1:8000/health >/dev/null || \
+        curl -fsS http://127.0.0.1:8085/nginx_health >/dev/null || exit 1
+
 ENTRYPOINT ["./deploy/docker-entrypoint.sh"]
 CMD ["label-studio"]

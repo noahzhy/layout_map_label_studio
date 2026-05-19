@@ -261,7 +261,15 @@ class StoreLayoutViewer {
         this.rotationAngle = 0;        // cumulative rotation in degrees
         this.nextAnnotationId = 1;
         this.selectedAnnotation = null; // id of currently selected annotation box
+        this.selectedAnnotationIds = new Set(); // ids of currently selected annotations
         this.selectedSplitRegion = null; // { annotationId, regionId } for split-bbox leaf selection
+        this.isSelectingAnnotations = false;
+        this.selectionStartWorld = null;
+        this.selectionCurrentWorld = null;
+        this.selectionBaseIds = new Set();
+        this._selectionStartScreen = null;
+        this._selectionDragMoved = false;
+        this._selectionAnchorAnnotationId = null;
         this.isSplitBoxDrawMode = false;
         this.isDrawingBox = false;
         this.drawStartWorld = null;     // {x, y} world coords of box start
@@ -1015,6 +1023,10 @@ class StoreLayoutViewer {
         this.metadata = data.metadata || {};
         this.selectedCamera = null;
         this.hoveredCamera = null;
+        this.selectedAnnotation = null;
+        this.selectedAnnotationIds = new Set();
+        this.selectedSplitRegion = null;
+        this.clearSelectionRectangleState();
 
         // Performance: build O(1) camera ID index
         this._cameraMap = new Map(this.cameras.map(c => [c.id, c]));
@@ -4367,6 +4379,10 @@ class StoreLayoutViewer {
         return ['fixture', 'aisle', 'area', 'category'].includes(ann.attribute);
     }
 
+    annotationSupportsBatchBusinessCategory(ann) {
+        return !!ann && ann.type === 'bbox' && this.annotationSupportsBusinessCategory(ann);
+    }
+
     getAisleDirectionOptions() {
         return ['Left', 'Right', 'Top', 'Bottom', 'Both'];
     }
@@ -5217,11 +5233,10 @@ class StoreLayoutViewer {
         ann.type = 'split-bbox';
         ann.attributes = ann.attributes && typeof ann.attributes === 'object' ? ann.attributes : {};
         ann.attributes.splitTree = splitTree;
-        this.selectedAnnotation = ann.id;
-        this.selectedSplitRegion = {
+        this.selectSingleAnnotation(ann.id, {
             annotationId: ann.id,
             regionId: this.getFirstSplitLeafId(splitTree),
-        };
+        }, { render: false });
         return true;
     }
 
@@ -5314,16 +5329,17 @@ class StoreLayoutViewer {
     splitLeaf(tree, regionId, orientation = 'horizontal') {
         const splitOrientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
         if (!tree || !regionId || tree.kind !== 'split') return false;
+        const selectedId = this.getSingleSelectedAnnotationId();
         if (tree.first && tree.first.kind !== 'split' && tree.first.id === regionId) {
             const attrs = JSON.parse(JSON.stringify(tree.first.attributes || {}));
             tree.first = this.createSplitNode(splitOrientation, 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
-            this.selectedSplitRegion = { annotationId: this.selectedAnnotation, regionId: tree.first.first.id };
+            this.selectedSplitRegion = selectedId ? { annotationId: selectedId, regionId: tree.first.first.id } : null;
             return true;
         }
         if (tree.second && tree.second.kind !== 'split' && tree.second.id === regionId) {
             const attrs = JSON.parse(JSON.stringify(tree.second.attributes || {}));
             tree.second = this.createSplitNode(splitOrientation, 0.5, this.createSplitLeaf(attrs), this.createSplitLeaf(attrs));
-            this.selectedSplitRegion = { annotationId: this.selectedAnnotation, regionId: tree.second.first.id };
+            this.selectedSplitRegion = selectedId ? { annotationId: selectedId, regionId: tree.second.first.id } : null;
             return true;
         }
         return this.splitLeaf(tree.first, regionId, splitOrientation) || this.splitLeaf(tree.second, regionId, splitOrientation);
@@ -5396,13 +5412,16 @@ class StoreLayoutViewer {
     }
 
     selectSplitRegion(annotationId, regionId) {
-        this.selectedAnnotation = annotationId;
-        this.selectedSplitRegion = { annotationId, regionId };
-        this.renderAnnotationBoxes();
+        this.selectSingleAnnotation(annotationId, { annotationId, regionId });
     }
 
     clearSelectedSplitRegionIfInvalid() {
         if (!this.selectedSplitRegion) return;
+        const selectedId = this.getSingleSelectedAnnotationId();
+        if (selectedId === null || this.selectedSplitRegion.annotationId !== selectedId) {
+            this.selectedSplitRegion = null;
+            return;
+        }
         const ann = this.annotations.find(a => a.id === this.selectedSplitRegion.annotationId);
         const leaf = ann ? this.findSplitLeaf(this.getSplitRoot(ann), this.selectedSplitRegion.regionId) : null;
         if (!leaf) this.selectedSplitRegion = null;
@@ -5426,8 +5445,10 @@ class StoreLayoutViewer {
             },
         };
         this.annotations.push(newAnn);
-        this.selectedAnnotation = newAnn.id;
-        this.selectedSplitRegion = { annotationId: newAnn.id, regionId: this.getFirstSplitLeafId(newAnn.attributes.splitTree) };
+        this.selectSingleAnnotation(newAnn.id, {
+            annotationId: newAnn.id,
+            regionId: this.getFirstSplitLeafId(newAnn.attributes.splitTree),
+        }, { render: false });
         this.hasUnsavedChanges = true;
         this.isSplitBoxDrawMode = false;
         this.pendingBoxKind = 'bbox';
@@ -5441,7 +5462,8 @@ class StoreLayoutViewer {
 
     addSplitToSelectedRegion(orientation = 'horizontal') {
         const splitOrientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
-        const selectedAnn = this.annotations.find(a => a.id === this.selectedAnnotation);
+        const selectedAnnotationId = this.getSingleSelectedAnnotationId();
+        const selectedAnn = this.annotations.find(a => a.id === selectedAnnotationId);
 
         if (this.canUpgradeBBoxToSplitBox(selectedAnn)) {
             this.pushHistory();
@@ -5454,7 +5476,7 @@ class StoreLayoutViewer {
             return;
         }
 
-        if (!this.selectedSplitRegion || this.selectedSplitRegion.annotationId !== this.selectedAnnotation) {
+        if (!this.selectedSplitRegion || this.selectedSplitRegion.annotationId !== selectedAnnotationId) {
             alert('请先选择一个 split boundingbox 的子区域，或选中一个 fixture bbox 后再按 A / D。');
             return;
         }
@@ -5507,7 +5529,7 @@ class StoreLayoutViewer {
         const root = this.getSplitRoot(box);
         if (!root) return;
         const { leaves, dividers } = this.getSplitLayout(root, { x: 0, y: 0, width: widthPx, height: heightPx });
-        const selectedRegionId = this.selectedSplitRegion && this.selectedSplitRegion.annotationId === box.id
+        const selectedRegionId = this.getSingleSelectedAnnotationId() === box.id && this.selectedSplitRegion && this.selectedSplitRegion.annotationId === box.id
             ? this.selectedSplitRegion.regionId
             : null;
 
@@ -5548,11 +5570,14 @@ class StoreLayoutViewer {
             region.appendChild(text);
 
             region.addEventListener('mousedown', (e) => {
+                if (e.shiftKey) {
+                    this.startAnnotationSelectionDrag(e, { clickedAnnotationId: box.id });
+                    return;
+                }
                 this.startAnnotationDrag(box.id, e, {
                     onClick: () => this.selectSplitRegion(box.id, leaf.id),
                     onDragStart: () => {
-                        this.selectedAnnotation = box.id;
-                        this.selectedSplitRegion = { annotationId: box.id, regionId: leaf.id };
+                        this.selectSingleAnnotation(box.id, { annotationId: box.id, regionId: leaf.id }, { render: false });
                     },
                 });
             });
@@ -5746,8 +5771,11 @@ class StoreLayoutViewer {
         const node = ann ? this.findSplitNode(this.getSplitRoot(ann), divider.node.id) : null;
         if (!ann || !node) return;
 
-        this.selectedAnnotation = box.id;
-        this.selectedSplitRegion = null;
+        this.setSelectedAnnotations([box.id], {
+            primaryId: box.id,
+            preserveSplitRegion: false,
+            render: false,
+        });
         this.pushHistory();
         document.body.classList.add('split-divider-dragging');
 
@@ -5943,9 +5971,12 @@ class StoreLayoutViewer {
     renderAnnotationBoxes() {
         const layer = document.getElementById('mapAnnotationLayer');
         if (!layer) return;
+        this.syncAnnotationSelectionState();
+        this.clearSelectedSplitRegionIfInvalid();
 
         // Remove existing annotation box elements (keep map-annotation labels)
         layer.querySelectorAll('.annotation-box').forEach(el => el.remove());
+        layer.querySelectorAll('.annotation-selection-box').forEach(el => el.remove());
         // Remove polygon vertex handles
         layer.querySelectorAll('.polygon-vertex-handle').forEach(el => el.remove());
 
@@ -5988,6 +6019,21 @@ class StoreLayoutViewer {
             }
         }
 
+        if (this.isSelectingAnnotations && this.selectionStartWorld && this.selectionCurrentWorld) {
+            const rect = this.getAnnotationSelectionRect();
+            if (rect) {
+                const topLeft = this.worldToScreen(rect.left, rect.top);
+                const bottomRight = this.worldToScreen(rect.right, rect.bottom);
+                const selectionEl = document.createElement('div');
+                selectionEl.className = 'annotation-selection-box';
+                selectionEl.style.left = `${Math.min(topLeft.x, bottomRight.x)}px`;
+                selectionEl.style.top = `${Math.min(topLeft.y, bottomRight.y)}px`;
+                selectionEl.style.width = `${Math.abs(bottomRight.x - topLeft.x)}px`;
+                selectionEl.style.height = `${Math.abs(bottomRight.y - topLeft.y)}px`;
+                fragment.appendChild(selectionEl);
+            }
+        }
+
         layer.appendChild(fragment);
 
         // Render polygons (separate SVG layer)
@@ -5999,6 +6045,11 @@ class StoreLayoutViewer {
 
     startAnnotationDrag(boxId, startEvent, options = {}) {
         if (!this.annotationMode || boxId === undefined || !startEvent || startEvent.button !== 0) return;
+
+        if (startEvent.shiftKey) {
+            this.startAnnotationSelectionDrag(startEvent, { clickedAnnotationId: boxId });
+            return;
+        }
 
         startEvent.stopPropagation();
         startEvent.preventDefault();
@@ -6019,7 +6070,7 @@ class StoreLayoutViewer {
         const applyDragState = () => {
             if (dragStateApplied) return;
             dragStateApplied = true;
-            this.selectedAnnotation = boxId;
+            this.selectSingleAnnotation(boxId, null, { render: false });
             if (typeof onDragStart === 'function') onDragStart(ann);
         };
 
@@ -6079,6 +6130,8 @@ class StoreLayoutViewer {
         el.style.top = `${top}px`;
         el.style.width = `${w}px`;
         el.style.height = `${h}px`;
+        const isSelected = box.id !== undefined && this.isAnnotationSelected(box.id);
+        const isSingleSelected = box.id !== undefined && this.getSingleSelectedAnnotationId() === box.id;
         if (box.angle) {
             el.style.transform = `rotate(${box.angle}deg)`;
         }
@@ -6095,7 +6148,7 @@ class StoreLayoutViewer {
 
         if (box.id !== undefined) {
             el.dataset.annotationId = box.id;
-            if (box.id === this.selectedAnnotation) {
+            if (isSelected) {
                 el.classList.add('annotation-box--selected');
             }
         }
@@ -6132,12 +6185,12 @@ class StoreLayoutViewer {
         const issueState = box.id !== undefined ? this.getAnnotationValidationState(box) : null;
         if (issueState) {
             this.applyAnnotationIssueTheme(issueState, el, labelEl);
-        } else if (box.id !== this.selectedAnnotation) {
+        } else if (!isSelected) {
             this.applyAnnotationBoxColors(box, el, labelEl);
         }
 
         // Add × delete button on selected box
-        if (box.id !== undefined && box.id === this.selectedAnnotation) {
+        if (box.id !== undefined && isSingleSelected) {
             const deleteBtn = document.createElement('span');
             deleteBtn.className = 'annotation-delete';
             deleteBtn.textContent = '×';
@@ -6154,7 +6207,7 @@ class StoreLayoutViewer {
         el.appendChild(labelEl);
 
         // Resize handles on selected box
-        if (box.id !== undefined && box.id === this.selectedAnnotation && this.annotationMode) {
+        if (box.id !== undefined && isSingleSelected && this.annotationMode) {
             const handles = ['nw', 'ne', 'se', 'sw'];
             for (const pos of handles) {
                 const handle = document.createElement('div');
@@ -6217,10 +6270,17 @@ class StoreLayoutViewer {
         // Drag to move and click to select/deselect
         if (box.id !== undefined && this.annotationMode) {
             el.addEventListener('mousedown', (e) => {
+                if (e.shiftKey) {
+                    this.startAnnotationSelectionDrag(e, { clickedAnnotationId: box.id });
+                    return;
+                }
                 this.startAnnotationDrag(box.id, e, {
                     onClick: () => {
-                        this.selectedAnnotation = this.selectedAnnotation === box.id ? null : box.id;
-                        this.selectedSplitRegion = null;
+                        if (this.getSingleSelectedAnnotationId() === box.id && this.getSelectedAnnotationIds().length === 1) {
+                            this.clearAnnotationSelection({ render: false });
+                        } else {
+                            this.selectSingleAnnotation(box.id, null, { render: false });
+                        }
                     },
                 });
             });
@@ -6308,9 +6368,11 @@ class StoreLayoutViewer {
         const name = displayLabel ? `"${displayLabel}"` : `#${id}`;
         if (!confirm(`Delete annotation ${name}?`)) return;
         this.pushHistory();
+        this.selectedAnnotationIds.delete(id);
         if (this.selectedAnnotation === id) this.selectedAnnotation = null;
         if (this.selectedSplitRegion && this.selectedSplitRegion.annotationId === id) this.selectedSplitRegion = null;
         this.annotations = this.annotations.filter(a => a.id !== id);
+        this.syncAnnotationSelectionState();
         this.hasUnsavedChanges = true;
         this.renderAnnotationBoxes();
         this.renderMapLegend();
@@ -8508,12 +8570,15 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             return;
         }
 
-        if (this.annotationMode && e.button === 0 && this.selectedAnnotation !== null) {
+        if (this.annotationMode && e.button === 0 && e.shiftKey && !this.isBoxDrawMode && !this.isSplitBoxDrawMode && !e.ctrlKey && !e.metaKey) {
+            this.startAnnotationSelectionDrag(e);
+            return;
+        }
+
+        if (this.annotationMode && e.button === 0 && this.hasAnyAnnotationSelection()) {
             const hitAnnotation = this.hitTestAnnotation(world.x, world.y);
             if (hitAnnotation === null) {
-                this.selectedAnnotation = null;
-                this.selectedSplitRegion = null;
-                this.renderAnnotationBoxes();
+                this.clearAnnotationSelection();
             }
         }
 
@@ -8558,6 +8623,29 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             return;
         }
 
+        if (this.isSelectingAnnotations) {
+            this.selectionCurrentWorld = this.screenToWorld(e.clientX, e.clientY);
+            if (!this._selectionDragMoved && this._selectionStartScreen) {
+                const dx = e.clientX - this._selectionStartScreen.x;
+                const dy = e.clientY - this._selectionStartScreen.y;
+                this._selectionDragMoved = (dx * dx + dy * dy) > 9;
+            }
+
+            if (this._selectionDragMoved) {
+                const rect = this.getAnnotationSelectionRect();
+                const hitIds = this.getAnnotationsIntersectingSelectionRect(rect);
+                const nextIds = new Set(this.selectionBaseIds);
+                for (const id of hitIds) nextIds.add(id);
+                const primaryId = this._selectionAnchorAnnotationId !== null && nextIds.has(this._selectionAnchorAnnotationId)
+                    ? this._selectionAnchorAnnotationId
+                    : (nextIds.has(this.selectedAnnotation) ? this.selectedAnnotation : (Array.from(nextIds).pop() || null));
+                this.setSelectedAnnotations(nextIds, { primaryId, render: false });
+            }
+
+            this.renderAnnotationBoxes();
+            return;
+        }
+
         if (this.isPanning) {
             // World-anchor approach: compute pan so anchor stays under cursor
             const rect = this.canvas.getBoundingClientRect();
@@ -8590,7 +8678,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         this._rafMouseMoveScheduled = false;
         const e = this._pendingMouseMoveEvent;
         this._pendingMouseMoveEvent = null;
-        if (!e || this.isPanning || this.isDrawingBox || this.isDrawingPolygon) return;
+        if (!e || this.isPanning || this.isDrawingBox || this.isDrawingPolygon || this.isSelectingAnnotations) return;
 
         const world = this.screenToWorld(e.clientX, e.clientY);
         const hitCamera = this.hitTestCamera(world.x, world.y);
@@ -8643,6 +8731,26 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             return;
         }
 
+        if (this.isSelectingAnnotations) {
+            this.selectionCurrentWorld = this.selectionCurrentWorld || this.screenToWorld(e.clientX, e.clientY);
+            if (this._selectionDragMoved) {
+                const rect = this.getAnnotationSelectionRect();
+                const hitIds = this.getAnnotationsIntersectingSelectionRect(rect);
+                const nextIds = new Set(this.selectionBaseIds);
+                for (const id of hitIds) nextIds.add(id);
+                const primaryId = this._selectionAnchorAnnotationId !== null && nextIds.has(this._selectionAnchorAnnotationId)
+                    ? this._selectionAnchorAnnotationId
+                    : (nextIds.has(this.selectedAnnotation) ? this.selectedAnnotation : (Array.from(nextIds).pop() || null));
+                this.setSelectedAnnotations(nextIds, { primaryId, render: false });
+            } else if (this._selectionAnchorAnnotationId !== null) {
+                this.toggleAnnotationSelection(this._selectionAnchorAnnotationId, { render: false });
+            }
+
+            this.clearSelectionRectangleState();
+            this.renderAnnotationBoxes();
+            return;
+        }
+
         this.isPanning = false;
         this.dragWorldAnchor = null;
         // Sync visible cameras now that the drag is over (was skipped during drag for performance)
@@ -8664,12 +8772,12 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
     }
 
     onMapDocumentMouseMove(e) {
-        if (!this.isDrawingBox && !this.isPanning) return;
+        if (!this.isDrawingBox && !this.isPanning && !this.isSelectingAnnotations) return;
         this.onMapMouseMove(e);
     }
 
     onMapDocumentMouseUp(e) {
-        if (!this.isDrawingBox && !this.isPanning) return;
+        if (!this.isDrawingBox && !this.isPanning && !this.isSelectingAnnotations) return;
         this.onMapMouseUp(e);
     }
 
@@ -9063,6 +9171,12 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
                 break;
 
             case 'Escape':
+                if (this.isSelectingAnnotations) {
+                    this.setSelectedAnnotations(this.selectionBaseIds, { render: false });
+                    this.clearSelectionRectangleState();
+                    this.renderAnnotationBoxes();
+                    break;
+                }
                 if (this.isDrawingPolygon) {
                     this.cancelPolygon();
                     break;
@@ -9074,10 +9188,8 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
                     break;
                 }
                 this.deselectCamera();
-                if (!this.readOnly && this.selectedAnnotation !== null) {
-                    this.selectedAnnotation = null;
-                    this.selectedSplitRegion = null;
-                    this.renderAnnotationBoxes();
+                if (!this.readOnly && this.hasAnyAnnotationSelection()) {
+                    this.clearAnnotationSelection();
                 }
                 break;
 
@@ -9094,9 +9206,9 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
 
             case 'x':
             case 'X':
-                if (!this.readOnly && this.annotationMode && this.selectedAnnotation !== null) {
+                if (!this.readOnly && this.annotationMode && this.getSingleSelectedAnnotationId() !== null) {
                     if (this.deleteSelectedSplitRegion()) break;
-                    this.deleteAnnotation(this.selectedAnnotation);
+                    this.deleteAnnotation(this.getSingleSelectedAnnotationId());
                 }
                 break;
 
@@ -9217,6 +9329,223 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         return inside;
     }
 
+    clearSelectionRectangleState() {
+        this.isSelectingAnnotations = false;
+        this.selectionStartWorld = null;
+        this.selectionCurrentWorld = null;
+        this.selectionBaseIds = new Set();
+        this._selectionStartScreen = null;
+        this._selectionDragMoved = false;
+        this._selectionAnchorAnnotationId = null;
+        if (!this.isBoxDrawMode && !this.isSplitBoxDrawMode && !this.isDrawingPolygon && !this.companionMode) {
+            this.canvas.style.cursor = 'grab';
+        }
+    }
+
+    syncAnnotationSelectionState() {
+        const validIds = new Set(this.annotations.map(a => a.id));
+        const nextIds = new Set([...this.selectedAnnotationIds].filter(id => validIds.has(id)));
+
+        if (nextIds.size === 0 && this.selectedAnnotation !== null && validIds.has(this.selectedAnnotation)) {
+            nextIds.add(this.selectedAnnotation);
+        }
+
+        this.selectedAnnotationIds = nextIds;
+
+        if (nextIds.size === 0) {
+            this.selectedAnnotation = null;
+            this.selectedSplitRegion = null;
+            return;
+        }
+
+        if (!nextIds.has(this.selectedAnnotation)) {
+            this.selectedAnnotation = Array.from(nextIds).pop() || null;
+        }
+
+        if (nextIds.size === 1) {
+            this.selectedAnnotation = Array.from(nextIds)[0] || null;
+        } else {
+            this.selectedSplitRegion = null;
+            return;
+        }
+
+        if (!this.selectedSplitRegion) return;
+        if (this.selectedSplitRegion.annotationId !== this.selectedAnnotation) {
+            this.selectedSplitRegion = null;
+            return;
+        }
+
+        const ann = this.annotations.find(a => a.id === this.selectedSplitRegion.annotationId);
+        const leaf = ann && ann.type === 'split-bbox'
+            ? this.findSplitLeaf(this.getSplitRoot(ann), this.selectedSplitRegion.regionId)
+            : null;
+        if (!leaf) {
+            this.selectedSplitRegion = null;
+        }
+    }
+
+    getSelectedAnnotationIds() {
+        this.syncAnnotationSelectionState();
+        return this.annotations
+            .filter(ann => this.selectedAnnotationIds.has(ann.id))
+            .map(ann => ann.id);
+    }
+
+    getSelectedAnnotations() {
+        const selectedIds = new Set(this.getSelectedAnnotationIds());
+        return this.annotations.filter(ann => selectedIds.has(ann.id));
+    }
+
+    hasAnyAnnotationSelection() {
+        return this.getSelectedAnnotationIds().length > 0;
+    }
+
+    isAnnotationSelected(annotationId) {
+        if (annotationId === null || annotationId === undefined) return false;
+        if (this.selectedAnnotationIds.has(annotationId)) return true;
+        return this.selectedAnnotationIds.size === 0 && this.selectedAnnotation === annotationId;
+    }
+
+    getSingleSelectedAnnotationId() {
+        const selectedIds = this.getSelectedAnnotationIds();
+        return selectedIds.length === 1 ? selectedIds[0] : null;
+    }
+
+    setSelectedAnnotations(ids, options = {}) {
+        const {
+            primaryId = null,
+            splitRegion = null,
+            preserveSplitRegion = false,
+            render = true,
+        } = options;
+        const validIds = new Set(this.annotations.map(a => a.id));
+        const nextIds = new Set();
+        for (const id of ids || []) {
+            if (validIds.has(id)) nextIds.add(id);
+        }
+
+        this.selectedAnnotationIds = nextIds;
+
+        if (nextIds.size === 0) {
+            this.selectedAnnotation = null;
+            this.selectedSplitRegion = null;
+        } else {
+            let nextPrimary = primaryId;
+            if (!nextIds.has(nextPrimary)) {
+                if (this.selectedAnnotation !== null && nextIds.has(this.selectedAnnotation)) {
+                    nextPrimary = this.selectedAnnotation;
+                } else {
+                    nextPrimary = Array.from(nextIds).pop() || null;
+                }
+            }
+
+            this.selectedAnnotation = nextPrimary;
+
+            if (nextIds.size !== 1) {
+                this.selectedSplitRegion = null;
+            } else if (splitRegion) {
+                this.selectedSplitRegion = {
+                    annotationId: splitRegion.annotationId,
+                    regionId: splitRegion.regionId,
+                };
+            } else if (!preserveSplitRegion || !this.selectedSplitRegion || this.selectedSplitRegion.annotationId !== nextPrimary) {
+                this.selectedSplitRegion = null;
+            }
+        }
+
+        this.syncAnnotationSelectionState();
+        if (render) this.renderAnnotationBoxes();
+    }
+
+    selectSingleAnnotation(annotationId, splitRegion = null, options = {}) {
+        if (annotationId === null || annotationId === undefined) {
+            this.clearAnnotationSelection(options);
+            return;
+        }
+
+        this.setSelectedAnnotations([annotationId], {
+            ...options,
+            primaryId: annotationId,
+            splitRegion,
+            preserveSplitRegion: !splitRegion,
+        });
+    }
+
+    toggleAnnotationSelection(annotationId, options = {}) {
+        if (annotationId === null || annotationId === undefined) return;
+        const nextIds = new Set(this.getSelectedAnnotationIds());
+        if (nextIds.has(annotationId)) {
+            nextIds.delete(annotationId);
+        } else {
+            nextIds.add(annotationId);
+        }
+
+        this.setSelectedAnnotations(nextIds, {
+            ...options,
+            primaryId: nextIds.has(annotationId)
+                ? annotationId
+                : (nextIds.has(this.selectedAnnotation) ? this.selectedAnnotation : null),
+        });
+    }
+
+    clearAnnotationSelection(options = {}) {
+        this.selectedAnnotation = null;
+        this.selectedAnnotationIds = new Set();
+        this.selectedSplitRegion = null;
+        if (options.render !== false) this.renderAnnotationBoxes();
+    }
+
+    getAnnotationSelectionRect(startWorld = this.selectionStartWorld, currentWorld = this.selectionCurrentWorld) {
+        if (!startWorld || !currentWorld) return null;
+        const left = Math.min(startWorld.x, currentWorld.x);
+        const top = Math.min(startWorld.y, currentWorld.y);
+        const right = Math.max(startWorld.x, currentWorld.x);
+        const bottom = Math.max(startWorld.y, currentWorld.y);
+        return {
+            left,
+            top,
+            right,
+            bottom,
+            width: right - left,
+            height: bottom - top,
+        };
+    }
+
+    getAnnotationsIntersectingSelectionRect(rect) {
+        if (!rect) return [];
+        return this.annotations
+            .filter((ann) => {
+                if (!ann || ann.type === 'polygon' || !this.isAnnotationVisible(ann)) return false;
+                const annLeft = Math.min(ann.x, ann.x + ann.width);
+                const annRight = Math.max(ann.x, ann.x + ann.width);
+                const annTop = Math.min(ann.y, ann.y + ann.height);
+                const annBottom = Math.max(ann.y, ann.y + ann.height);
+                return !(annRight < rect.left || annLeft > rect.right || annBottom < rect.top || annTop > rect.bottom);
+            })
+            .map(ann => ann.id);
+    }
+
+    startAnnotationSelectionDrag(startEvent, options = {}) {
+        if (!this.annotationMode || !startEvent || startEvent.button !== 0) return;
+
+        startEvent.stopPropagation();
+        startEvent.preventDefault();
+
+        const startWorld = this.screenToWorld(startEvent.clientX, startEvent.clientY);
+        this.isSelectingAnnotations = true;
+        this.selectionStartWorld = startWorld;
+        this.selectionCurrentWorld = startWorld;
+        this.selectionBaseIds = new Set(this.getSelectedAnnotationIds());
+        this._selectionStartScreen = { x: startEvent.clientX, y: startEvent.clientY };
+        this._selectionDragMoved = false;
+        this._selectionAnchorAnnotationId = Number.isFinite(options.clickedAnnotationId)
+            ? options.clickedAnnotationId
+            : null;
+        this.canvas.style.cursor = 'crosshair';
+        this.hideMapThumbnail();
+        this.renderAnnotationBoxes();
+    }
+
     // ========================================================================
     // History (Undo / Redo)
     // ========================================================================
@@ -9238,9 +9567,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         this.historyIndex--;
         this.annotations = JSON.parse(JSON.stringify(this.historyStack[this.historyIndex]));
         this.nextAnnotationId = this.annotations.reduce((max, a) => Math.max(max, (a.id || 0) + 1), this.nextAnnotationId);
-        if (this.selectedAnnotation !== null && !this.annotations.find(a => a.id === this.selectedAnnotation)) {
-            this.selectedAnnotation = null;
-        }
+        this.syncAnnotationSelectionState();
         this.clearSelectedSplitRegionIfInvalid();
         this.hasUnsavedChanges = true;
         this.updateUndoRedoButtons();
@@ -9253,6 +9580,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         this.historyIndex++;
         this.annotations = JSON.parse(JSON.stringify(this.historyStack[this.historyIndex]));
         this.nextAnnotationId = this.annotations.reduce((max, a) => Math.max(max, (a.id || 0) + 1), this.nextAnnotationId);
+        this.syncAnnotationSelectionState();
         this.clearSelectedSplitRegionIfInvalid();
         this.hasUnsavedChanges = true;
         this.updateUndoRedoButtons();
@@ -9393,7 +9721,8 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         const screenVerts = verts.map(v => this.worldToScreen(v[0], v[1]));
         const points = screenVerts.map(s => `${s.x},${s.y}`).join(' ');
 
-        const isSelected = ann.id === this.selectedAnnotation;
+        const isSelected = this.isAnnotationSelected(ann.id);
+        const isSingleSelected = this.getSingleSelectedAnnotationId() === ann.id;
         const theme = this.getLabelTheme(ann.label, ann.attribute);
         const fillColor = theme ? this.hexToRgba(theme.accentColor, ann.attribute === 'area' ? 0.18 : 0.10) : 'rgba(100,100,255,0.1)';
         const strokeColor = theme ? theme.accentColor : '#5050ff';
@@ -9421,6 +9750,11 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
                 e.stopPropagation();
                 e.preventDefault();
 
+                if (e.shiftKey) {
+                    this.toggleAnnotationSelection(ann.id);
+                    return;
+                }
+
                 const startWorld = this.screenToWorld(e.clientX, e.clientY);
                 const startVerts = ann.vertices.map(v => [v[0], v[1]]); // snapshot
                 const dragStart = { x: e.clientX, y: e.clientY };
@@ -9432,7 +9766,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
                     const dy = me.clientY - dragStart.y;
                     if (!dragMoved && (dx * dx + dy * dy) > 9) {
                         dragMoved = true;
-                        this.selectedAnnotation = ann.id;
+                        this.selectSingleAnnotation(ann.id, null, { render: false });
                         if (!historyPushed) { this.pushHistory(); historyPushed = true; }
                     }
                     if (dragMoved) {
@@ -9448,7 +9782,11 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
                     document.removeEventListener('mouseup', onUp);
                     if (!dragMoved) {
                         // No drag — toggle selection
-                        this.selectedAnnotation = this.selectedAnnotation === ann.id ? null : ann.id;
+                        if (this.getSingleSelectedAnnotationId() === ann.id && this.getSelectedAnnotationIds().length === 1) {
+                            this.clearAnnotationSelection({ render: false });
+                        } else {
+                            this.selectSingleAnnotation(ann.id, null, { render: false });
+                        }
                     } else {
                         this.hasUnsavedChanges = true;
                     }
@@ -9493,7 +9831,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         }
 
         // Delete button for selected polygon — positioned at bounding-box top-right
-        if (isSelected && this.annotationMode) {
+        if (isSingleSelected && this.annotationMode) {
             const bbMaxX = Math.max(...screenVerts.map(v => v.x));
             const bbMinY = Math.min(...screenVerts.map(v => v.y));
             const delBtn = document.createElement('span');
@@ -9609,23 +9947,222 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
     // Attributes Panel
     // ========================================================================
 
+    buildAttrPanelNote(message, variant = 'muted') {
+        const note = document.createElement('div');
+        note.className = `attr-panel-note attr-panel-note--${variant}`;
+        note.textContent = message;
+        return note;
+    }
+
+    getBatchBusinessCategoryPanelState(selectedAnnotations) {
+        const annotations = Array.isArray(selectedAnnotations) ? selectedAnnotations.filter(Boolean) : [];
+        const editableAnnotations = annotations.filter(ann => this.annotationSupportsBatchBusinessCategory(ann));
+        const unsupportedAnnotations = annotations.filter(ann => !this.annotationSupportsBatchBusinessCategory(ann));
+
+        const categoryValues = editableAnnotations.map((ann) => {
+            const attrs = ann.attributes && typeof ann.attributes === 'object' ? ann.attributes : {};
+            return attrs.category || '';
+        });
+        const uniqueCategories = [...new Set(categoryValues)];
+
+        const subcategoryValues = editableAnnotations.map((ann) => {
+            const attrs = ann.attributes && typeof ann.attributes === 'object' ? ann.attributes : {};
+            return this.normalizeSubcategoryValues(attrs.subcategory);
+        });
+        const uniqueSubcategories = [...new Set(subcategoryValues.map(values => JSON.stringify(values)))];
+
+        return {
+            editableAnnotations,
+            unsupportedAnnotations,
+            sharedCategory: editableAnnotations.length > 0 && uniqueCategories.length === 1
+                ? uniqueCategories[0]
+                : '',
+            sharedSubcategories: editableAnnotations.length > 0 && uniqueSubcategories.length === 1
+                ? [...subcategoryValues[0]]
+                : [],
+            hasMixedCategory: editableAnnotations.length > 1 && uniqueCategories.length > 1,
+            hasMixedSubcategory: editableAnnotations.length > 1 && uniqueSubcategories.length > 1,
+        };
+    }
+
+    appendBatchBusinessCategoryFields(content, batchAttrs, annotations) {
+        const categoryOptions = this.getCategoryLabels();
+        if (categoryOptions.length === 0) return false;
+
+        const syncBatchAttrs = () => {
+            const state = this.getBatchBusinessCategoryPanelState(annotations);
+            batchAttrs.category = state.sharedCategory;
+            batchAttrs.subcategory = [...state.sharedSubcategories];
+            return state;
+        };
+
+        const applyCategoryValue = (value) => {
+            const nextCategory = value || '';
+            const nextSubcategoryOptions = this.getBusinessSubcategoryOptions(nextCategory);
+            batchAttrs.category = nextCategory;
+            for (const ann of annotations) {
+                const attrs = ann.attributes && typeof ann.attributes === 'object'
+                    ? ann.attributes
+                    : (ann.attributes = {});
+                attrs.category = nextCategory;
+                attrs.subcategory = this.normalizeSubcategoryValues(attrs.subcategory)
+                    .filter(item => nextSubcategoryOptions.includes(item));
+            }
+            syncBatchAttrs();
+        };
+
+        const applySubcategoryValue = (values) => {
+            const nextValues = this.normalizeSubcategoryValues(values);
+            batchAttrs.subcategory = [...nextValues];
+            for (const ann of annotations) {
+                const attrs = ann.attributes && typeof ann.attributes === 'object'
+                    ? ann.attributes
+                    : (ann.attributes = {});
+                attrs.subcategory = [...nextValues];
+            }
+            syncBatchAttrs();
+        };
+
+        const handleAfterChange = () => {
+            syncBatchAttrs();
+            this.refreshBusinessCategoryDisplay();
+        };
+
+        let subcategoryField = null;
+        const subcategoryFieldOptions = {
+            searchable: true,
+            searchPlaceholder: this.englishOnly ? 'Search sub-category…' : '搜索 Sub-category…',
+            helpUrl: this.getTranslationTableUrl(),
+            helpTitle: 'Open Sub-category translation table',
+            disabled: this.readOnly,
+            applyValue: applySubcategoryValue,
+        };
+
+        const categoryField = this.buildAttrSelect(
+            'category',
+            'Category',
+            categoryOptions,
+            batchAttrs,
+            null,
+            () => {
+                if (subcategoryField) {
+                    this.populateMultiSelectOptions(
+                        subcategoryField,
+                        this.getBusinessSubcategoryOptions(batchAttrs.category),
+                        batchAttrs.subcategory,
+                        batchAttrs,
+                        'subcategory',
+                        null,
+                        handleAfterChange,
+                        subcategoryFieldOptions
+                    );
+                }
+                handleAfterChange();
+            },
+            {
+                searchable: true,
+                searchPlaceholder: this.englishOnly ? 'Search category…' : '搜索 Category…',
+                disabled: this.readOnly,
+                applyValue: applyCategoryValue,
+            }
+        );
+        content.appendChild(categoryField);
+
+        subcategoryField = this.buildAttrMultiSelect(
+            'subcategory',
+            'Sub-category',
+            this.getBusinessSubcategoryOptions(batchAttrs.category),
+            batchAttrs,
+            null,
+            handleAfterChange,
+            subcategoryFieldOptions
+        );
+        content.appendChild(subcategoryField);
+        return true;
+    }
+
+    renderBatchBusinessCategoryPanel(content, selectedAnnotations) {
+        const state = this.getBatchBusinessCategoryPanelState(selectedAnnotations);
+        const totalCount = selectedAnnotations.length;
+        const editableCount = state.editableAnnotations.length;
+
+        if (editableCount === 0) {
+            content.appendChild(this.buildAttrPanelNote('No selected annotations support batch Category / Sub-category editing yet.', 'warning'));
+            content.appendChild(this.buildAttrPanelNote('Use single selection for split sub-regions, split-bbox containers, or polygons.', 'muted'));
+            return;
+        }
+
+        if (editableCount !== totalCount) {
+            content.appendChild(this.buildAttrPanelNote(`${editableCount} of ${totalCount} selected annotations support batch Category / Sub-category editing.`, 'warning'));
+        } else {
+            content.appendChild(this.buildAttrPanelNote(`Batch editing Category / Sub-category for ${editableCount} selected annotations.`, 'muted'));
+        }
+
+        if (state.hasMixedCategory || state.hasMixedSubcategory) {
+            content.appendChild(this.buildAttrPanelNote('Blank values mean the current selection has mixed Category / Sub-category values; choosing a new value will overwrite all supported annotations.', 'muted'));
+        } else {
+            content.appendChild(this.buildAttrPanelNote('Only Category / Sub-category are batched here. Use single selection for Label, Notes, and Aisle fields.', 'muted'));
+        }
+
+        if (this.readOnly) {
+            content.appendChild(this.buildAttrPanelNote('Read-only mode: batch taxonomy fields are disabled.', 'muted'));
+        }
+
+        const controlsRow = this.buildAttrRow('attr-row--two');
+        this.appendBatchBusinessCategoryFields(controlsRow, {
+            category: state.sharedCategory,
+            subcategory: [...state.sharedSubcategories],
+        }, state.editableAnnotations);
+        content.appendChild(controlsRow);
+    }
+
     updateAttributesPanel() {
         const panel = document.getElementById('attributesPanel');
         const content = document.getElementById('attributesPanelContent');
         if (!panel || !content) return;
 
-        if (this.selectedAnnotation === null) {
+        const selectedIds = this.getSelectedAnnotationIds();
+        if (selectedIds.length === 0 || !this.annotationMode) {
             panel.style.display = 'none';
             delete panel.dataset.annotationId;
             delete panel.dataset.splitRegionId;
+            delete panel.dataset.selectionMode;
+            delete panel.dataset.selectionSignature;
             return;
         }
 
-        const ann = this.annotations.find(a => a.id === this.selectedAnnotation);
-        if (!ann || !this.annotationMode) {
+        if (selectedIds.length > 1) {
+            const selectionSignature = selectedIds.join(',');
+            const isSameBatchSelection = panel.dataset.selectionMode === 'batch'
+                && panel.dataset.selectionSignature === selectionSignature;
+            if (panel.matches(':focus-within') && isSameBatchSelection) return;
+
+            panel.style.display = '';
+            panel.dataset.selectionMode = 'batch';
+            panel.dataset.selectionSignature = selectionSignature;
+            delete panel.dataset.annotationId;
+            delete panel.dataset.splitRegionId;
+            content.innerHTML = '';
+
+            const badge = document.createElement('div');
+            badge.className = 'attr-label-header';
+            badge.textContent = `${selectedIds.length} annotations selected`;
+            content.appendChild(badge);
+
+            const selectedAnnotations = selectedIds
+                .map(id => this.annotations.find(a => a.id === id))
+                .filter(Boolean);
+            this.renderBatchBusinessCategoryPanel(content, selectedAnnotations);
+            return;
+        }
+
+        const ann = this.annotations.find(a => a.id === selectedIds[0]);
+        if (!ann) {
             panel.style.display = 'none';
             delete panel.dataset.annotationId;
             delete panel.dataset.splitRegionId;
+            delete panel.dataset.selectionMode;
+            delete panel.dataset.selectionSignature;
             return;
         }
 
@@ -9642,9 +10179,12 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         const renderedSplitRegionId = panel.dataset.splitRegionId || '';
         const isSameAnnotation = renderedAnnotationId === ann.id;
         const isSameSplitRegion = (splitLeaf ? splitLeaf.id : '') === renderedSplitRegionId;
-        if (panel.matches(':focus-within') && isSameAnnotation && isSameSplitRegion) return;
+        const isSameSelectionMode = panel.dataset.selectionMode === 'single';
+        if (panel.matches(':focus-within') && isSameSelectionMode && isSameAnnotation && isSameSplitRegion) return;
 
         panel.style.display = '';
+        panel.dataset.selectionMode = 'single';
+        panel.dataset.selectionSignature = String(ann.id);
         panel.dataset.annotationId = String(ann.id);
         if (splitLeaf) panel.dataset.splitRegionId = splitLeaf.id;
         else delete panel.dataset.splitRegionId;
@@ -9970,6 +10510,9 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         if (!list) return;
 
         const normalizedSelected = this.normalizeSubcategoryValues(selectedValues);
+        const applyValue = typeof fieldOptions.applyValue === 'function'
+            ? fieldOptions.applyValue
+            : (nextValues) => { attrs[key] = nextValues; };
         field._attrAllOptions = Array.isArray(options) ? [...options] : [];
 
         const searchInput = field.querySelector('.attr-search-input');
@@ -9995,6 +10538,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             checkbox.type = 'checkbox';
             checkbox.value = opt;
             checkbox.checked = normalizedSelected.includes(opt);
+            checkbox.disabled = !!fieldOptions.disabled;
 
             const text = document.createElement('span');
             text.textContent = this.getDisplayText(opt).trim() || '—';
@@ -10005,10 +10549,10 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
                 const nextSerialized = JSON.stringify(nextValues);
                 const lastSerialized = field.dataset.attrLastValue || '[]';
                 if (nextSerialized === lastSerialized) return;
-                this.pushHistory();
-                attrs[key] = nextValues;
+                if (!fieldOptions.skipHistory) this.pushHistory();
+                applyValue(nextValues, { key, attrs, ann, field });
                 field.dataset.attrLastValue = nextSerialized;
-                this.hasUnsavedChanges = true;
+                if (fieldOptions.markUnsaved !== false) this.hasUnsavedChanges = true;
                 if (onAfterChange) onAfterChange(nextValues);
             });
 
@@ -10035,6 +10579,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             searchInput.placeholder = labelOptions.searchPlaceholder || 'Search…';
             searchInput.autocomplete = 'off';
             searchInput.spellcheck = false;
+            searchInput.disabled = !!labelOptions.disabled;
             searchInput.addEventListener('input', () => {
                 field.dataset.attrSearchValue = searchInput.value;
                 this.populateMultiSelectOptions(
@@ -10065,6 +10610,9 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         const lbl = this.buildAttrFieldLabel(labelText, fieldOptions);
         const sel = document.createElement('select');
         const selectedValue = attrs[key] != null ? attrs[key] : '';
+        const applyValue = typeof fieldOptions.applyValue === 'function'
+            ? fieldOptions.applyValue
+            : (value) => { attrs[key] = value; };
         field._attrAllOptions = Array.isArray(options) ? [...options] : [];
 
         const refreshSelectOptions = () => {
@@ -10083,6 +10631,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             searchInput.placeholder = fieldOptions.searchPlaceholder || 'Search…';
             searchInput.autocomplete = 'off';
             searchInput.spellcheck = false;
+            searchInput.disabled = !!fieldOptions.disabled;
             searchInput.addEventListener('input', () => {
                 field.dataset.attrSearchValue = searchInput.value;
                 refreshSelectOptions();
@@ -10096,14 +10645,15 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
         }
 
         refreshSelectOptions();
+        sel.disabled = !!fieldOptions.disabled;
         const handleSelectValueChange = () => {
             const nextValue = sel.value;
             const lastValue = sel.dataset.attrLastValue || '';
             if (nextValue === lastValue) return;
-            this.pushHistory();
-            attrs[key] = nextValue;
+            if (!fieldOptions.skipHistory) this.pushHistory();
+            applyValue(nextValue, { key, attrs, ann, field, select: sel });
             sel.dataset.attrLastValue = nextValue;
-            this.hasUnsavedChanges = true;
+            if (fieldOptions.markUnsaved !== false) this.hasUnsavedChanges = true;
             if (onAfterChange) onAfterChange(nextValue);
         };
         sel.addEventListener('input', handleSelectValueChange);

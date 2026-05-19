@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Store Layout Map</title>
-    <link rel="stylesheet" href="/static/store_layout/viewer.css?v=4">
+    <link rel="stylesheet" href="/static/store_layout/viewer.css?v=5">
 </head>
 <body>
     <div id="app">
@@ -186,6 +186,8 @@
                 <tr><td>Double-click (polygon mode)</td><td>Close &amp; finish polygon</td></tr>
                 <tr><td>Click near start vertex</td><td>Auto-close polygon</td></tr>
                 <tr><td>Click box/polygon</td><td>Select / deselect annotation</td></tr>
+                <tr><td>Shift + Click box/polygon</td><td>Add / remove a single annotation from the current selection</td></tr>
+                <tr><td>Shift + Drag (map)</td><td>Marquee-select multiple annotation boxes, then batch edit Category / Sub-category</td></tr>
                 <tr><td>Click split region</td><td>Select sub-region and edit Category / Aisle / Direction / Type</td></tr>
                 <tr><td>Type in Category / Sub-category</td><td>Filter the option list to quickly find labels</td></tr>
                 <tr><td>Drag split line</td><td>Resize adjacent sub-regions</td></tr>
@@ -323,6 +325,6 @@
             }
         });
     </script>
-    <script src="/static/store_layout/viewer.js?v=16"></script>
+    <script src="/static/store_layout/viewer.js?v=17"></script>
 </body>
 </html>

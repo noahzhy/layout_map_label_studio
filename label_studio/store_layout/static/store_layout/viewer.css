@@ -1427,6 +1427,27 @@ input[type="checkbox"]:focus-visible {
     display: inline-block;
 }
 
+.attr-panel-note {
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.attr-panel-note--muted {
+    color: var(--text-muted);
+    background: rgba(243, 236, 217, 0.72);
+    border-color: rgba(186, 167, 137, 0.58);
+}
+
+.attr-panel-note--warning {
+    color: #8a5a2b;
+    background: rgba(255, 247, 230, 0.94);
+    border-color: rgba(184, 110, 36, 0.34);
+}
+
 #calibrateBtn.active {
     background: var(--accent);
     color: #fff;
@@ -2095,6 +2116,15 @@ body.split-divider-dragging * {
 .annotation-box--preview {
     border-style: dashed;
     pointer-events: none;
+}
+
+.annotation-selection-box {
+    position: absolute;
+    border: 1.5px dashed rgba(138, 90, 43, 0.82);
+    background: rgba(184, 132, 71, 0.12);
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 9;
 }
 
 /* Mobile / narrow layout */

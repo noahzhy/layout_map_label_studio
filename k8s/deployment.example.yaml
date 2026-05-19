@@ -1,0 +1,105 @@
+# Minimal Kubernetes example for the default single-container startup mode.
+# This image's default CMD is `label-studio`, which serves HTTP on port 8080.
+#
+# If you intentionally split the same image into two containers like docker-compose.deploy.yml:
+# - app container probe     -> http://127.0.0.1:8000/health
+# - nginx container probe   -> http://127.0.0.1:8085/nginx_health
+# Do not reuse this 8080-based probe config for that split mode.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: store-layout-app
+  labels:
+    app: store-layout-app
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: store-layout-app
+  template:
+    metadata:
+      labels:
+        app: store-layout-app
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1001
+      containers:
+        - name: app
+          image: ccr.ccs.tencentyun.com/clobotics/labelstudio-storelayout:replace-with-timestamp-tag
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DJANGO_DB
+              value: default
+            - name: LABEL_STUDIO_DJANGO_DB
+              value: default
+          envFrom:
+            - secretRef:
+                name: store-layout-secrets
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 48
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          volumeMounts:
+            - name: app-data
+              mountPath: /label-studio/data
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 0
+      volumes:
+        - name: app-data
+          persistentVolumeClaim:
+            claimName: store-layout-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: store-layout-app
+  labels:
+    app: store-layout-app
+spec:
+  type: ClusterIP
+  selector:
+    app: store-layout-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
