@@ -5098,11 +5098,6 @@ class StoreLayoutViewer {
         } else if (this.pendingBox) {
             const { x, y, width, height } = this.pendingBox;
             const attrs = {};
-            // Auto-number Shelf
-            if (this.isShelfFacingFixtureType(label)) {
-                attrs.shelfNumber = this.getNextShelfNumber();
-                attrs.side = 'Both';
-            }
             const newAnn = {
                 id: this.nextAnnotationId++,
                 type: 'bbox',
@@ -10514,10 +10509,12 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             ? fieldOptions.applyValue
             : (nextValues) => { attrs[key] = nextValues; };
         field._attrAllOptions = Array.isArray(options) ? [...options] : [];
+        field._attrSelectedValues = [...normalizedSelected];
 
         const searchInput = field.querySelector('.attr-search-input');
         const searchQuery = field.dataset.attrSearchValue || (searchInput ? searchInput.value : '');
         const values = this.filterOptionsBySearch(field._attrAllOptions, searchQuery, normalizedSelected);
+        const visibleValueSet = new Set(values);
 
         list.textContent = '';
 
@@ -10526,7 +10523,7 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             empty.className = 'attr-multiselect-empty';
             empty.textContent = searchQuery ? 'No matches' : '—';
             list.appendChild(empty);
-            field.dataset.attrLastValue = JSON.stringify([]);
+            field.dataset.attrLastValue = JSON.stringify(normalizedSelected);
             return;
         }
 
@@ -10544,13 +10541,36 @@ ${svgContent.replace(/^<\?xml[^>]*>\s*/i, '').trim()}
             text.textContent = this.getDisplayText(opt).trim() || '—';
 
             checkbox.addEventListener('change', () => {
-                const nextValues = Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))
-                    .map(input => input.value);
+                const currentSelected = this.normalizeSubcategoryValues(field._attrSelectedValues);
+                const visibleChecked = new Set(
+                    Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))
+                        .map(input => input.value)
+                );
+                const nextValues = [];
+                const nextValueSet = new Set();
+
+                for (const value of currentSelected) {
+                    if (!visibleValueSet.has(value) || visibleChecked.has(value)) {
+                        if (!nextValueSet.has(value)) {
+                            nextValues.push(value);
+                            nextValueSet.add(value);
+                        }
+                    }
+                }
+
+                for (const value of values) {
+                    if (visibleChecked.has(value) && !nextValueSet.has(value)) {
+                        nextValues.push(value);
+                        nextValueSet.add(value);
+                    }
+                }
+
                 const nextSerialized = JSON.stringify(nextValues);
                 const lastSerialized = field.dataset.attrLastValue || '[]';
                 if (nextSerialized === lastSerialized) return;
                 if (!fieldOptions.skipHistory) this.pushHistory();
                 applyValue(nextValues, { key, attrs, ann, field });
+                field._attrSelectedValues = [...nextValues];
                 field.dataset.attrLastValue = nextSerialized;
                 if (fieldOptions.markUnsaved !== false) this.hasUnsavedChanges = true;
                 if (onAfterChange) onAfterChange(nextValues);
