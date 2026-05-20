@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils import timezone
 
-from .models import LayoutProject, LayoutTask
+from .models import LayoutProject, LayoutTask, LayoutTaskSnapshot
 
 
 @admin.register(LayoutProject)
@@ -55,4 +55,37 @@ class LayoutTaskAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('assigned_to', 'assigned_by', 'project')
+
+
+@admin.register(LayoutTaskSnapshot)
+class LayoutTaskSnapshotAdmin(admin.ModelAdmin):
+    list_display = [
+        'id', 'scope', 'project', 'trigger_type', 'status', 'cutoff_at', 'created_by', 'finished_at',
+    ]
+    list_filter = ['scope', 'trigger_type', 'status', 'project']
+    search_fields = ['project__name', 'error_message', 'created_by__email', 'created_by__username']
+    raw_id_fields = ['project', 'created_by']
+    readonly_fields = [
+        'scope', 'project', 'trigger_type', 'status', 'created_by', 'cutoff_at', 'filters', 'counters', 'file',
+        'error_message', 'created_at', 'updated_at', 'finished_at',
+    ]
+    ordering = ['-cutoff_at', '-created_at']
+
+    fieldsets = (
+        (None, {'fields': ('scope', 'project', 'trigger_type', 'status', 'file')}),
+        ('Snapshot data', {'fields': ('cutoff_at', 'filters', 'counters', 'error_message')}),
+        ('Meta', {'fields': ('created_by', 'created_at', 'updated_at', 'finished_at')}),
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_active and request.user.is_staff
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('project', 'created_by')
 

@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: store-layout-nightly-snapshot
+spec:
+  # Every day at 00:00 Asia/Shanghai.
+  schedule: "0 0 * * *"
+  timeZone: "Asia/Shanghai"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: snapshot
+              image: your-registry/store-layout-map:replace-with-tag
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - /label-studio/label_studio/manage.py
+                - create_layout_snapshot
+                - --scope
+                - all
+                - --trigger
+                - scheduled
+                - --sync
+              envFrom:
+                - secretRef:
+                    name: store-layout-env
+              volumeMounts:
+                - name: label-studio-data
+                  mountPath: /label-studio/data
+          volumes:
+            - name: label-studio-data
+              persistentVolumeClaim:
+                claimName: label-studio-data

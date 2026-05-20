@@ -9,12 +9,13 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.http import FileResponse, HttpResponse, HttpResponseForbidden, HttpResponseNotAllowed, JsonResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
-from .models import LayoutProject, LayoutTask
+from .models import LayoutProject, LayoutTask, LayoutTaskSnapshot
+from .snapshot_service import schedule_layout_task_snapshot
 
 User = get_user_model()
 
@@ -98,6 +99,10 @@ def project_detail(request, pk):
 
     if _is_admin(request.user):
         tasks_qs = LayoutTask.objects.filter(project=project).select_related('assigned_to').order_by('store_id', 'assigned_to__email')
+        snapshots = LayoutTaskSnapshot.objects.filter(
+            project=project,
+            scope=LayoutTaskSnapshot.Scope.PROJECT,
+        ).order_by('-created_at')[:10]
         tasks_by_store: dict = {}
         for t in tasks_qs:
             tasks_by_store.setdefault(t.store_id, []).append(t)
@@ -118,6 +123,7 @@ def project_detail(request, pk):
             'project': project,
             'stores': stores,
             'is_admin': True,
+            'snapshots': snapshots,
         })
     else:
         my_tasks = LayoutTask.objects.filter(
@@ -136,6 +142,37 @@ def project_detail(request, pk):
             'stores': stores,
             'is_admin': False,
         })
+
+
+@login_required
+@require_POST
+def create_project_snapshot(request, pk):
+    if not _is_admin(request.user):
+        return HttpResponseForbidden('Admin access required.')
+
+    project = get_object_or_404(LayoutProject, pk=pk)
+    schedule_layout_task_snapshot(
+        LayoutTaskSnapshot.Scope.PROJECT,
+        project=project,
+        trigger_type=LayoutTaskSnapshot.TriggerType.MANUAL,
+        created_by=request.user,
+        filters={'requested_from': 'project_detail'},
+    )
+    return redirect('store_layout:project-detail', pk=project.pk)
+
+
+@login_required
+def download_snapshot(request, snapshot_pk):
+    if not _is_admin(request.user):
+        return HttpResponseForbidden('Admin access required.')
+
+    snapshot = get_object_or_404(LayoutTaskSnapshot.objects.select_related('project'), pk=snapshot_pk)
+    if snapshot.status != LayoutTaskSnapshot.Status.COMPLETED or not snapshot.file:
+        return HttpResponse('Snapshot file not available', status=404)
+
+    snapshot.file.open('rb')
+    filename = os.path.basename(snapshot.file.name)
+    return FileResponse(snapshot.file, as_attachment=True, filename=filename)
 
 
 # ── Viewer ───────────────────────────────────────────────────────────────────

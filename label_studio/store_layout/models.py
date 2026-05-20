@@ -1,5 +1,11 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
+
+
+def layout_snapshot_upload_to(instance, filename):
+    base_dir = getattr(settings, 'DELAYED_EXPORT_DIR', 'export').strip('/').rstrip('/') or 'export'
+    return f'{base_dir}/store_layout_snapshots/{filename}'
 
 
 class LayoutProject(models.Model):
@@ -106,3 +112,77 @@ class LayoutTask(models.Model):
     def __str__(self):
         user_str = self.assigned_to.email if self.assigned_to_id else 'unassigned'
         return f'{self.store_id} → {user_str} [{self.status}]'
+
+
+class LayoutTaskSnapshot(models.Model):
+    """Persisted export snapshots for Store Layout task assignment/reporting state."""
+
+    class Scope(models.TextChoices):
+        PROJECT = 'project', 'Project'
+        ALL_TASKS = 'all_tasks', 'All tasks'
+
+    class TriggerType(models.TextChoices):
+        MANUAL = 'manual', 'Manual'
+        SCHEDULED = 'scheduled', 'Scheduled'
+
+    class Status(models.TextChoices):
+        CREATED = 'created', 'Created'
+        IN_PROGRESS = 'in_progress', 'In progress'
+        FAILED = 'failed', 'Failed'
+        COMPLETED = 'completed', 'Completed'
+
+    scope = models.CharField(max_length=32, choices=Scope.choices, default=Scope.PROJECT, db_index=True)
+    project = models.ForeignKey(
+        LayoutProject,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='snapshots',
+        help_text='Project scope for manual exports; blank for all-task scheduled snapshots.',
+    )
+    trigger_type = models.CharField(
+        max_length=32,
+        choices=TriggerType.choices,
+        default=TriggerType.MANUAL,
+        db_index=True,
+    )
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.CREATED, db_index=True)
+    file = models.FileField(upload_to=layout_snapshot_upload_to, null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='layout_snapshots_created',
+    )
+    cutoff_at = models.DateTimeField(db_index=True, help_text='Point-in-time represented by this snapshot.')
+    filters = models.JSONField(default=dict, blank=True)
+    counters = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = 'store_layout'
+        ordering = ['-cutoff_at', '-created_at']
+        verbose_name = 'Layout Task Snapshot'
+        verbose_name_plural = 'Task Snapshots'
+
+    def __str__(self):
+        target = self.project.name if self.scope == self.Scope.PROJECT and self.project_id else 'All tasks'
+        cutoff_text = timezone.localtime(self.cutoff_at).strftime('%Y-%m-%d %H:%M:%S') if self.cutoff_at else 'n/a'
+        return f'{target} snapshot @ {cutoff_text} [{self.status}]'
+
+    def save(self, *args, **kwargs):
+        if self.scope != self.Scope.PROJECT:
+            self.project = None
+        if self.cutoff_at is None:
+            self.cutoff_at = timezone.now()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        stored_file = self.file
+        super().delete(*args, **kwargs)
+        if stored_file:
+            stored_file.delete(save=False)

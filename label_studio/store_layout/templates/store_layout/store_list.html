@@ -27,6 +27,90 @@
         }
         .admin-bar a { color: #8a5a2b; font-weight: 600; text-decoration: none; }
         .admin-bar a:hover { text-decoration: underline; }
+        .snapshot-panel {
+            margin-bottom: 22px;
+            padding: 16px;
+            background: #fff8ee;
+            border: 1px solid #d3c3a6;
+            border-radius: 8px;
+        }
+        .snapshot-panel-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        .snapshot-panel-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #6f4b22;
+            margin-bottom: 4px;
+        }
+        .snapshot-panel-desc {
+            font-size: 12px;
+            color: #7b6a54;
+        }
+        .snapshot-btn {
+            border: 1px solid #38a169;
+            background: #38a169;
+            color: #fff;
+            border-radius: 8px;
+            padding: 9px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .snapshot-btn:hover {
+            background: #2f855a;
+            border-color: #2f855a;
+        }
+        .snapshot-list {
+            display: grid;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .snapshot-item {
+            padding: 12px 14px;
+            background: #fdf6e8;
+            border: 1px solid #d8cab0;
+            border-radius: 8px;
+        }
+        .snapshot-item-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .snapshot-meta {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: #5c4d3b;
+        }
+        .snapshot-meta strong {
+            color: #352b1f;
+        }
+        .snapshot-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            font-size: 12px;
+            color: #6b5a45;
+        }
+        .snapshot-empty {
+            margin-top: 12px;
+            font-size: 12px;
+            color: #7b6a54;
+        }
+        .snapshot-error {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #822727;
+        }
         .store-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -66,6 +150,10 @@
         .badge-unknown_error  { background:#fed7d7; color:#742a2a; }
         .badge-review_in_progress { background:#faf089; color:#744210; }
         .badge-review_rejected { background:#feb2b2; color:#822727; }
+        .badge-created        { background:#e2e8f0; color:#4a5568; }
+        .badge-in_progress    { background:#bee3f8; color:#1a365d; }
+        .badge-failed         { background:#fed7d7; color:#742a2a; }
+        .badge-completed      { background:#c6f6d5; color:#22543d; }
         .badge-pending        { background:#feebc8; color:#92400e; }
         .badge-in_progress    { background:#bee3f8; color:#1a365d; }
         .badge-done           { background:#c6f6d5; color:#22543d; }
@@ -94,6 +182,55 @@
                 <a href="/admin/store_layout/layouttask/add/" target="_blank">Django Admin → Tasks</a>
             </span>
             <a href="{% url 'store_layout:assign-tasks' pk=project.id %}" style="font-weight:700;color:#38a169;">📋 Task Assignment Management →</a>
+        </div>
+
+        <div class="snapshot-panel">
+            <div class="snapshot-panel-head">
+                <div>
+                    <div class="snapshot-panel-title">Task snapshots</div>
+                    <div class="snapshot-panel-desc">
+                        Export the current task assignment and annotation status for this project as a ZIP bundle with CSV reports.
+                    </div>
+                </div>
+                <form method="post" action="{% url 'store_layout:project-snapshot-create' pk=project.id %}">
+                    {% csrf_token %}
+                    <button type="submit" class="snapshot-btn">Export current annotation snapshot</button>
+                </form>
+            </div>
+
+            {% if snapshots %}
+            <div class="snapshot-list">
+                {% for snapshot in snapshots %}
+                <div class="snapshot-item">
+                    <div class="snapshot-item-head">
+                        <div class="snapshot-meta">
+                            <strong>{{ snapshot.cutoff_at|date:"Y-m-d H:i:s" }}</strong>
+                            <span class="badge badge-{{ snapshot.status }}">{{ snapshot.get_status_display }}</span>
+                            <span>{{ snapshot.get_trigger_type_display }}</span>
+                            {% if snapshot.finished_at %}
+                            <span>Finished {{ snapshot.finished_at|date:"m/d H:i" }}</span>
+                            {% endif %}
+                        </div>
+                        {% if snapshot.file and snapshot.status == 'completed' %}
+                        <a class="preview-link" href="{% url 'store_layout:snapshot-download' snapshot_pk=snapshot.id %}">Download ZIP →</a>
+                        {% endif %}
+                    </div>
+                    <div class="snapshot-stats">
+                        <span>{{ snapshot.counters.total_tasks|default:0 }} tasks</span>
+                        <span>{{ snapshot.counters.annotation_total|default:0 }} annotations</span>
+                        <span>{{ snapshot.counters.bbox_total|default:0 }} bbox</span>
+                        <span>{{ snapshot.counters.polygon_total|default:0 }} polygon</span>
+                        <span>{{ snapshot.counters.split_leaf_total|default:0 }} split leaves</span>
+                    </div>
+                    {% if snapshot.error_message %}
+                    <div class="snapshot-error">{{ snapshot.error_message }}</div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="snapshot-empty">No snapshots yet for this project.</div>
+            {% endif %}
         </div>
         {% endif %}
 

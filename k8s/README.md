@@ -2,6 +2,8 @@
 
 This directory contains a minimal Kubernetes example for the image built by `src/build.sh`.
 
+It also includes an example `layout_snapshot_cronjob.example.yaml` for generating a Store Layout task snapshot every night.
+
 ## What the example assumes
 
 `deployment.example.yaml` assumes the image runs with its default Docker command:
@@ -76,3 +78,13 @@ At minimum, make sure the mounted `/label-studio/data` volume is writable by UID
 - `127.0.0.1:8085/nginx_health` for `nginx`
 
 That container-level check is useful for local Docker and some runtimes, but Kubernetes should still rely on explicit probes in the Deployment.
+
+## Nightly Store Layout snapshots
+
+Use `layout_snapshot_cronjob.example.yaml` when you want to persist a daily snapshot of Store Layout task assignment and annotation counts.
+
+The example runs:
+
+- `python /label-studio/label_studio/manage.py create_layout_snapshot --scope all --trigger scheduled --sync`
+
+`--sync` keeps the CronJob self-contained: the CronJob pod generates the ZIP file directly instead of depending on a separate RQ worker.

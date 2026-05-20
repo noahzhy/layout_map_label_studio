@@ -12,6 +12,8 @@ urlpatterns = [
     path('store_layout/projects/<int:pk>/', views.project_detail, name='project-detail'),
     # Task assignment management (admin only)
     path('store_layout/projects/<int:pk>/assign/', views.assign_tasks, name='assign-tasks'),
+    path('store_layout/projects/<int:pk>/snapshots/create/', views.create_project_snapshot, name='project-snapshot-create'),
+    path('store_layout/snapshots/<int:snapshot_pk>/download/', views.download_snapshot, name='snapshot-download'),
     # Viewer
     path('store_layout/<str:store_id>/', views.viewer_page, name='viewer'),
     path('store_layout/<str:store_id>/assets-metadata', views.store_assets, name='store-assets'),
